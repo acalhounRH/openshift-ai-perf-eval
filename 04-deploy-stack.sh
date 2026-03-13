@@ -212,7 +212,7 @@ spec:
         inference-backend: simulator
     spec:
       nodeSelector:
-        node-role.kubernetes.io/app-worker: ""
+        node-role.kubernetes.io/inference-worker: ""
       containers:
       - name: simulator
         image: ${SIMULATOR_IMAGE}
