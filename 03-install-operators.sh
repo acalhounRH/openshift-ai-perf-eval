@@ -18,6 +18,10 @@ ok "Connected to cluster as $(oc whoami)"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1. NODE FEATURE DISCOVERY
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  info "Simulator mode — skipping NFD and GPU Operator (no GPU required)"
+else
+
 info "Installing Node Feature Discovery (NFD) Operator..."
 
 oc apply -f - <<EOF
@@ -324,6 +328,8 @@ spec:
       app: nvidia-dcgm-exporter
 EOF
 ok "DCGM exporter ServiceMonitor created"
+
+fi  # end USE_SIMULATOR check (NFD + GPU Operator)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3. OPENSHIFT SERVERLESS (KNATIVE) — required for autoscaling evaluation

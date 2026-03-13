@@ -33,18 +33,6 @@ oc apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: model-storage
-  namespace: ${PERF_NAMESPACE}
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: ${MODEL_STORAGE_SIZE}
-  storageClassName: ${STORAGE_CLASS}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: benchmark-results
   namespace: ${PERF_NAMESPACE}
 spec:
@@ -55,7 +43,24 @@ spec:
   storageClassName: ${STORAGE_CLASS}
 EOF
 
-ok "PVCs created (model-storage: ${MODEL_STORAGE_SIZE}, benchmark-results: ${BENCHMARK_RESULTS_STORAGE_SIZE})"
+if [[ "${USE_SIMULATOR:-false}" != "true" ]]; then
+  oc apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-storage
+  namespace: ${PERF_NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${MODEL_STORAGE_SIZE}
+  storageClassName: ${STORAGE_CLASS}
+EOF
+  ok "PVCs created (model-storage: ${MODEL_STORAGE_SIZE}, benchmark-results: ${BENCHMARK_RESULTS_STORAGE_SIZE})"
+else
+  ok "PVCs created (benchmark-results: ${BENCHMARK_RESULTS_STORAGE_SIZE}) — model-storage skipped (simulator mode)"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3. DEPLOY POSTGRESQL
@@ -179,19 +184,12 @@ oc rollout status deployment/postgresql -n "${PERF_NAMESPACE}" --timeout=180s 2>
 ok "PostgreSQL deployed (sessions, config, inference cache)"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 4. DEPLOY vLLM INFERENCE SERVER
+# 4. DEPLOY INFERENCE BACKEND (vLLM or llm-d Simulator)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-info "Deploying vLLM inference server on GPU node..."
-
-if [[ -z "${HF_TOKEN:-}" ]]; then
-  warn "HF_TOKEN is not set. If ${MODEL_ID} is a gated model, the download will fail."
-  warn "Set HF_TOKEN in config.env or export it before running this script."
-fi
-
-oc create secret generic hf-token \
-  --from-literal=token="${HF_TOKEN:-}" \
-  -n "${PERF_NAMESPACE}" \
-  --dry-run=client -o yaml | oc apply -f -
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  info "Deploying llm-d inference simulator (no GPU required)..."
+  info "  Image: ${SIMULATOR_IMAGE}"
+  info "  Mode:  ${SIMULATOR_MODE}, TTFT=${SIMULATOR_TTFT_MS}ms, ITL=${SIMULATOR_ITL_MS}ms"
 
 oc apply -f - <<EOF
 apiVersion: apps/v1
@@ -201,6 +199,100 @@ metadata:
   namespace: ${PERF_NAMESPACE}
   labels:
     app: vllm-inference
+    inference-backend: simulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-inference
+  template:
+    metadata:
+      labels:
+        app: vllm-inference
+        inference-backend: simulator
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/app-worker: ""
+      containers:
+      - name: simulator
+        image: ${SIMULATOR_IMAGE}
+        args:
+        - "--model"
+        - "${MODEL_ID}"
+        - "--port"
+        - "8000"
+        - "--mode"
+        - "${SIMULATOR_MODE}"
+        - "--ttft"
+        - "${SIMULATOR_TTFT_MS}"
+        - "--itl"
+        - "${SIMULATOR_ITL_MS}"
+        - "--max-tokens"
+        - "${SIMULATOR_MAX_TOKENS}"
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            cpu: "1"
+            memory: "512Mi"
+          limits:
+            cpu: "4"
+            memory: "2Gi"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-inference
+  namespace: ${PERF_NAMESPACE}
+  labels:
+    app: vllm-inference
+spec:
+  selector:
+    app: vllm-inference
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+EOF
+
+  ok "Simulator Deployment + Service created (same service name: vllm-inference)"
+  info "Simulator should be ready within seconds — no model download required."
+
+else
+  info "Deploying vLLM inference server on GPU node..."
+
+  if [[ -z "${HF_TOKEN:-}" ]]; then
+    warn "HF_TOKEN is not set. If ${MODEL_ID} is a gated model, the download will fail."
+    warn "Set HF_TOKEN in config.env or export it before running this script."
+  fi
+
+  oc create secret generic hf-token \
+    --from-literal=token="${HF_TOKEN:-}" \
+    -n "${PERF_NAMESPACE}" \
+    --dry-run=client -o yaml | oc apply -f -
+
+oc apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-inference
+  namespace: ${PERF_NAMESPACE}
+  labels:
+    app: vllm-inference
+    inference-backend: vllm
 spec:
   replicas: 1
   strategy:
@@ -212,6 +304,7 @@ spec:
     metadata:
       labels:
         app: vllm-inference
+        inference-backend: vllm
     spec:
       nodeSelector:
         node-role.kubernetes.io/gpu-worker: ""
@@ -306,9 +399,10 @@ spec:
     name: http
 EOF
 
-ok "vLLM Deployment + Service created"
-warn "Model download + loading may take 20-45 min for ${MODEL_ID}."
-warn "Monitor: oc logs -f deployment/vllm-inference -n ${PERF_NAMESPACE}"
+  ok "vLLM Deployment + Service created"
+  warn "Model download + loading may take 20-45 min for ${MODEL_ID}."
+  warn "Monitor: oc logs -f deployment/vllm-inference -n ${PERF_NAMESPACE}"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 5. DEPLOY LLAMA STACK
@@ -826,8 +920,12 @@ info "Services in ${PERF_NAMESPACE}:"
 oc get svc -n "${PERF_NAMESPACE}" 2>/dev/null || true
 echo ""
 
-warn "vLLM model loading takes 10-20 minutes for a 70B model."
-warn "Monitor vLLM: oc logs -f deployment/vllm-inference -n ${PERF_NAMESPACE}"
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  info "Inference backend: llm-d simulator (no GPU, ready in seconds)"
+else
+  warn "vLLM model loading takes 10-20 minutes for a 70B model."
+  warn "Monitor vLLM: oc logs -f deployment/vllm-inference -n ${PERF_NAMESPACE}"
+fi
 warn "Monitor Llama Stack: oc logs -f deployment/llama-stack -n ${PERF_NAMESPACE}"
 echo ""
 info "Next step: ./05-validate.sh"

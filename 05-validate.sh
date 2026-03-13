@@ -49,9 +49,13 @@ check_warn() {
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 info "── Cluster Health ──"
 
-# 6 nodes Ready
 NODE_COUNT=$(oc get nodes --no-headers 2>/dev/null | grep -c "Ready" || echo 0)
-check "All 6 nodes are Ready (found: ${NODE_COUNT})" test "${NODE_COUNT}" -eq 6
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  EXPECTED_NODES=5
+else
+  EXPECTED_NODES=6
+fi
+check "All ${EXPECTED_NODES} nodes are Ready (found: ${NODE_COUNT})" test "${NODE_COUNT}" -eq "${EXPECTED_NODES}"
 
 # Masters have no user pods
 MASTER_USER_PODS=$(oc get pods -n "${PERF_NAMESPACE}" -o wide --no-headers 2>/dev/null | grep -c "master" || true)
@@ -76,17 +80,20 @@ check "App worker node labeled (found: ${APP_LABELED})" test "${APP_LABELED}" -g
 LOADGEN_LABELED=$(oc get nodes -l node-role.kubernetes.io/loadgen-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
 check "Load-gen worker node labeled (found: ${LOADGEN_LABELED})" test "${LOADGEN_LABELED}" -ge 1
 
-GPU_LABELED=$(oc get nodes -l nvidia.com/gpu.present=true --no-headers 2>/dev/null | wc -l | tr -d ' ')
-check "GPU node detected (found: ${GPU_LABELED})" test "${GPU_LABELED}" -ge 1
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  info "(simulator mode — GPU node checks skipped)"
+else
+  GPU_LABELED=$(oc get nodes -l nvidia.com/gpu.present=true --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  check "GPU node detected (found: ${GPU_LABELED})" test "${GPU_LABELED}" -ge 1
 
-# GPU taint check
-GPU_NODE=$(oc get nodes -l nvidia.com/gpu.present=true -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-if [[ -n "$GPU_NODE" ]]; then
-  GPU_TAINTED=$(oc get node "${GPU_NODE}" -o jsonpath='{.spec.taints}' 2>/dev/null | grep -c "nvidia.com/gpu" || true)
-  check_warn "GPU node has nvidia.com/gpu taint" test "${GPU_TAINTED}" -ge 1
+  GPU_NODE=$(oc get nodes -l nvidia.com/gpu.present=true -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [[ -n "$GPU_NODE" ]]; then
+    GPU_TAINTED=$(oc get node "${GPU_NODE}" -o jsonpath='{.spec.taints}' 2>/dev/null | grep -c "nvidia.com/gpu" || true)
+    check_warn "GPU node has nvidia.com/gpu taint" test "${GPU_TAINTED}" -ge 1
 
-  GPU_COUNT=$(oc get node "${GPU_NODE}" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}' 2>/dev/null || echo 0)
-  check "GPU node shows ${TENSOR_PARALLEL_SIZE} GPUs (found: ${GPU_COUNT})" test "${GPU_COUNT}" -eq "${TENSOR_PARALLEL_SIZE}"
+    GPU_COUNT=$(oc get node "${GPU_NODE}" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}' 2>/dev/null || echo 0)
+    check "GPU node shows ${TENSOR_PARALLEL_SIZE} GPUs (found: ${GPU_COUNT})" test "${GPU_COUNT}" -eq "${TENSOR_PARALLEL_SIZE}"
+  fi
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -132,8 +139,12 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 info "── Storage ──"
 
-MODEL_PVC_PHASE=$(oc get pvc model-storage -n "${PERF_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-check "model-storage PVC is Bound (${MODEL_PVC_PHASE})" test "${MODEL_PVC_PHASE}" = "Bound"
+if [[ "${USE_SIMULATOR:-false}" != "true" ]]; then
+  MODEL_PVC_PHASE=$(oc get pvc model-storage -n "${PERF_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+  check "model-storage PVC is Bound (${MODEL_PVC_PHASE})" test "${MODEL_PVC_PHASE}" = "Bound"
+else
+  info "(simulator mode — model-storage PVC check skipped)"
+fi
 
 PG_PVC_PHASE=$(oc get pvc postgresql-data -n "${PERF_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
 check "postgresql-data PVC is Bound (${PG_PVC_PHASE})" test "${PG_PVC_PHASE}" = "Bound"
@@ -160,8 +171,12 @@ info "── Metrics Pipeline ──"
 PROM_RUNNING=$(oc get pods -n openshift-monitoring -l app.kubernetes.io/name=prometheus --no-headers 2>/dev/null | grep -c Running || true)
 check_warn "Prometheus is running (found: ${PROM_RUNNING} pods)" test "${PROM_RUNNING}" -ge 1
 
-DCGM_RUNNING=$(oc get pods -n nvidia-gpu-operator -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -c Running || true)
-check_warn "DCGM exporter pods running (found: ${DCGM_RUNNING})" test "${DCGM_RUNNING}" -ge 1
+if [[ "${USE_SIMULATOR:-false}" != "true" ]]; then
+  DCGM_RUNNING=$(oc get pods -n nvidia-gpu-operator -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -c Running || true)
+  check_warn "DCGM exporter pods running (found: ${DCGM_RUNNING})" test "${DCGM_RUNNING}" -ge 1
+else
+  info "(simulator mode — DCGM exporter check skipped)"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SMOKE TESTS
@@ -179,11 +194,18 @@ if [[ -n "$PG_POD" ]]; then
   check "PostgreSQL user '${POSTGRESQL_USER}' can connect to '${POSTGRESQL_DB}'" test "${PG_CONNECT}" = "1"
 fi
 
-# GPU check (nvidia-smi)
-VLLM_POD=$(oc get pod -l app=vllm-inference -n "${PERF_NAMESPACE}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-if [[ -n "$VLLM_POD" ]]; then
-  check_warn "nvidia-smi runs in vLLM pod" \
-    oc exec "${VLLM_POD}" -n "${PERF_NAMESPACE}" -- nvidia-smi
+if [[ "${USE_SIMULATOR:-false}" != "true" ]]; then
+  VLLM_POD=$(oc get pod -l app=vllm-inference -n "${PERF_NAMESPACE}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [[ -n "$VLLM_POD" ]]; then
+    check_warn "nvidia-smi runs in vLLM pod" \
+      oc exec "${VLLM_POD}" -n "${PERF_NAMESPACE}" -- nvidia-smi
+  fi
+else
+  VLLM_POD=$(oc get pod -l app=vllm-inference -n "${PERF_NAMESPACE}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [[ -n "$VLLM_POD" ]]; then
+    check "Simulator pod is running" \
+      oc exec "${VLLM_POD}" -n "${PERF_NAMESPACE}" -- test -f /proc/1/status
+  fi
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
