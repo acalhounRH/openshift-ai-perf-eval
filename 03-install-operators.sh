@@ -140,7 +140,7 @@ echo ""
 # so the GPU operator can proceed with driver installation.
 if [[ "$NFD_LABELED" == "false" ]]; then
   warn "NFD did not label the GPU node in time. Applying labels manually..."
-  GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/gpu-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
+  GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
   if [[ -n "$GPU_NODE" ]]; then
     KERNEL_VERSION=$(oc get node "$GPU_NODE" -o jsonpath='{.status.nodeInfo.kernelVersion}' 2>/dev/null)
     OS_IMAGE=$(oc get node "$GPU_NODE" -o jsonpath='{.status.nodeInfo.osImage}' 2>/dev/null)
@@ -160,13 +160,13 @@ if [[ "$NFD_LABELED" == "false" ]]; then
     fi
     ok "Manual labels applied to ${GPU_NODE}"
   else
-    warn "No gpu-worker node found to label"
+    warn "No inference-worker node found to label"
   fi
 fi
 
 # The GPU Operator needs OSTREE_VERSION label for DTK driver compilation.
 # NFD may not set this even when running, so always ensure it exists.
-GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/gpu-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
+GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
 if [[ -n "$GPU_NODE" ]]; then
   EXISTING_OSTREE=$(oc get node "$GPU_NODE" -o jsonpath='{.metadata.labels.feature\.node\.kubernetes\.io/system-os_release\.OSTREE_VERSION}' 2>/dev/null)
   if [[ -z "$EXISTING_OSTREE" ]]; then

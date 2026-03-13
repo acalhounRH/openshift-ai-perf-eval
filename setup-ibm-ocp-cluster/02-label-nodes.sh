@@ -30,8 +30,8 @@ APP_NODE=$(oc get nodes \
   -l "node.kubernetes.io/instance-type=${APP_WORKER_INSTANCE_TYPE},node-role.kubernetes.io/worker" \
   --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
 
-# GPU worker: identified by GPU instance type
-GPU_NODE=$(oc get nodes \
+# Inference worker: identified by GPU/inference instance type
+INFERENCE_NODE=$(oc get nodes \
   -l "node.kubernetes.io/instance-type=${GPU_WORKER_INSTANCE_TYPE}" \
   --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
 
@@ -42,12 +42,12 @@ LOADGEN_NODE=$(oc get nodes \
 
 # ─── Validate detection ──────────────────────────────────────────────────
 [[ -n "$APP_NODE" ]]     || bail "Could not find app worker node (${APP_WORKER_INSTANCE_TYPE})"
-[[ -n "$GPU_NODE" ]]     || bail "Could not find GPU worker node (${GPU_WORKER_INSTANCE_TYPE})"
+[[ -n "$INFERENCE_NODE" ]] || bail "Could not find inference worker node (${GPU_WORKER_INSTANCE_TYPE})"
 [[ -n "$LOADGEN_NODE" ]] || bail "Could not find load-gen worker node (${LOADGEN_WORKER_INSTANCE_TYPE})"
 
 info "Detected nodes:"
 info "  App worker:      ${APP_NODE}"
-info "  GPU worker:      ${GPU_NODE}"
+info "  Inference worker: ${INFERENCE_NODE}"
 info "  Load-gen worker: ${LOADGEN_NODE}"
 echo ""
 
@@ -61,17 +61,17 @@ info "Labeling load-gen worker..."
 oc label node "${LOADGEN_NODE}" node-role.kubernetes.io/loadgen-worker="" --overwrite
 ok "Load-gen worker labeled: node-role.kubernetes.io/loadgen-worker"
 
-# ─── Label GPU worker ────────────────────────────────────────────────────
+# ─── Label inference worker ──────────────────────────────────────────────
 # The GPU taint is applied in 03-install-operators.sh after the GPU Operator
 # is installed and GPUs are detected. Here we just label for identification.
-info "Labeling GPU worker..."
-oc label node "${GPU_NODE}" node-role.kubernetes.io/gpu-worker="" --overwrite
-ok "GPU worker labeled: node-role.kubernetes.io/gpu-worker"
+info "Labeling inference worker..."
+oc label node "${INFERENCE_NODE}" node-role.kubernetes.io/inference-worker="" --overwrite
+ok "Inference worker labeled: node-role.kubernetes.io/inference-worker"
 
 # ─── Verify ───────────────────────────────────────────────────────────────
 echo ""
 info "Verifying labels..."
-oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/gpu-worker,node-role.kubernetes.io/loadgen-worker \
+oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/loadgen-worker \
   --no-headers | while read -r line; do
   echo "  $line"
 done

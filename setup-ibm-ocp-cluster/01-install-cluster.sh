@@ -64,7 +64,7 @@ compute:
         type: ${APP_WORKER_INSTANCE_TYPE}
         zones:
           - ${IBMCLOUD_ZONE}
-  - name: gpu-worker
+  - name: inference-worker
     replicas: 1
     platform:
       ibmcloud:

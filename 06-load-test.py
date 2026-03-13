@@ -301,8 +301,8 @@ class ScaleMetrics:
     # Node utilization
     node_app_cpu_pct: Optional[float] = None
     node_app_mem_pct: Optional[float] = None
-    node_gpu_cpu_pct: Optional[float] = None
-    node_gpu_mem_pct: Optional[float] = None
+    node_inference_cpu_pct: Optional[float] = None
+    node_inference_mem_pct: Optional[float] = None
     node_loadgen_cpu_pct: Optional[float] = None
     node_loadgen_mem_pct: Optional[float] = None
     node_cp_cpu_pct: Optional[float] = None
@@ -362,7 +362,7 @@ RATE_METRICS = {
 
     # Node CPU (rate-based)
     "node_app_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_app_worker=""}},"instance","$1","node","(.+)"))',
-    "node_gpu_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_gpu_worker=""}},"instance","$1","node","(.+)"))',
+    "node_inference_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_inference_worker=""}},"instance","$1","node","(.+)"))',
     "node_loadgen_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_loadgen_worker=""}},"instance","$1","node","(.+)"))',
     "node_cp_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_master=""}},"instance","$1","node","(.+)"))',
 }
@@ -395,7 +395,7 @@ GAUGE_METRICS = {
 
     # Node memory gauges
     "node_app_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_app_worker=""},"instance","$1","node","(.+)"))',
-    "node_gpu_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_gpu_worker=""},"instance","$1","node","(.+)"))',
+    "node_inference_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_inference_worker=""},"instance","$1","node","(.+)"))',
     "node_loadgen_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_loadgen_worker=""},"instance","$1","node","(.+)"))',
 }
 
@@ -617,12 +617,12 @@ def print_scaling_report(results: list[ScaleMetrics], csv_path: str):
     print("  INSTANCE (NODE) UTILIZATION BY ROLE")
     print("═" * 120)
     print()
-    print(f"{'Conc':>5} │ {'App Worker':>18} │ {'GPU Worker':>18} │ {'Loadgen Worker':>18} │ {'Ctrl Plane':>12}")
+    print(f"{'Conc':>5} │ {'App Worker':>18} │ {'Inference Worker':>18} │ {'Loadgen Worker':>18} │ {'Ctrl Plane':>12}")
     print(f"{'':>5} │ {'CPU%':>8} {'Mem%':>9} │ {'CPU%':>8} {'Mem%':>9} │ {'CPU%':>8} {'Mem%':>9} │ {'CPU%':>12}")
     print("─" * 100)
     for m in results:
         print(f"{m.concurrency:>5} │ {fmt(m.node_app_cpu_pct,1):>8} {fmt(m.node_app_mem_pct,1):>9} │ "
-              f"{fmt(m.node_gpu_cpu_pct,1):>8} {fmt(m.node_gpu_mem_pct,1):>9} │ "
+              f"{fmt(m.node_inference_cpu_pct,1):>8} {fmt(m.node_inference_mem_pct,1):>9} │ "
               f"{fmt(m.node_loadgen_cpu_pct,1):>8} {fmt(m.node_loadgen_mem_pct,1):>9} │ "
               f"{fmt(m.node_cp_cpu_pct,1):>12}")
     print()
@@ -761,7 +761,7 @@ def print_scaling_report(results: list[ScaleMetrics], csv_path: str):
     print("\n── Node Utilization ──")
     for cpu_attr, mem_attr, name in [
         ("node_app_cpu_pct", "node_app_mem_pct", "App Worker"),
-        ("node_gpu_cpu_pct", "node_gpu_mem_pct", "GPU Worker"),
+        ("node_inference_cpu_pct", "node_inference_mem_pct", "Inference Worker"),
         ("node_loadgen_cpu_pct", "node_loadgen_mem_pct", "Loadgen Worker"),
     ]:
         cv = [(m.concurrency, safe(getattr(m, cpu_attr))) for m in results]

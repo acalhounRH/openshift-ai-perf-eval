@@ -307,7 +307,7 @@ spec:
         inference-backend: vllm
     spec:
       nodeSelector:
-        node-role.kubernetes.io/gpu-worker: ""
+        node-role.kubernetes.io/inference-worker: ""
       tolerations:
       - key: nvidia.com/gpu
         operator: Exists

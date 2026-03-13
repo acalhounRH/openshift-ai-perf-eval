@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 02-label-nodes.sh — Create MachineSets for GPU/loadgen workers, label nodes
+# 02-label-nodes.sh — Create MachineSets for inference/loadgen workers, label nodes
 # ============================================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -122,10 +122,10 @@ EOF
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 2. CREATE GPU WORKER MACHINESET
+# 2. CREATE INFERENCE WORKER MACHINESET
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-GPU_MS_NAME="${INFRA_ID}-gpu-worker-${AWS_ZONE}"
-create_machineset "${GPU_MS_NAME}" "${GPU_WORKER_INSTANCE_TYPE}" "${GPU_WORKER_ROOT_VOLUME_SIZE}" "gpu-worker"
+INFERENCE_MS_NAME="${INFRA_ID}-inference-worker-${AWS_ZONE}"
+create_machineset "${INFERENCE_MS_NAME}" "${GPU_WORKER_INSTANCE_TYPE}" "${GPU_WORKER_ROOT_VOLUME_SIZE}" "inference-worker"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3. CREATE LOADGEN WORKER MACHINESET
@@ -140,10 +140,10 @@ info "Waiting for new worker nodes to provision (5-10 minutes)..."
 echo ""
 
 for i in $(seq 1 60); do
-  GPU_READY=$(oc get nodes -l node-role.kubernetes.io/gpu-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  INFERENCE_READY=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
   LOADGEN_READY=$(oc get nodes -l node-role.kubernetes.io/loadgen-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
 
-  if [[ "$GPU_READY" -ge 1 && "$LOADGEN_READY" -ge 1 ]]; then
+  if [[ "$INFERENCE_READY" -ge 1 && "$LOADGEN_READY" -ge 1 ]]; then
     echo ""
     ok "All worker nodes are ready"
     break
@@ -164,7 +164,7 @@ oc get machinesets -n openshift-machine-api
 echo ""
 
 info "Node roles:"
-oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/gpu-worker,node-role.kubernetes.io/loadgen-worker
+oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/loadgen-worker
 echo ""
 
 ok "Node setup complete."
