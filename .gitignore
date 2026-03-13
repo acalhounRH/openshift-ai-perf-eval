@@ -1,0 +1,26 @@
+# Cluster installer state (contains secrets, kubeconfig, kubeadmin password)
+cluster-*/
+**/cluster-*/
+
+# Per-user config files (contain real domains, cluster names, API key refs)
+config.env
+
+# Reports (may contain internal URLs and cluster-specific details)
+reports/
+
+# OpenShift installer artifacts
+*.log
+install-config.yaml.bak
+terraform.tfstate*
+auth/
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+*.kubeconfig
+pull-secret*.json
+
+# OS junk
+.DS_Store
+Thumbs.db
