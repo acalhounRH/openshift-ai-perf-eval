@@ -125,7 +125,7 @@ EOF
 # 2. CREATE INFERENCE WORKER MACHINESET
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INFERENCE_MS_NAME="${INFRA_ID}-inference-worker-${AWS_ZONE}"
-create_machineset "${INFERENCE_MS_NAME}" "${GPU_WORKER_INSTANCE_TYPE}" "${GPU_WORKER_ROOT_VOLUME_SIZE}" "inference-worker"
+create_machineset "${INFERENCE_MS_NAME}" "${INFERENCE_WORKER_INSTANCE_TYPE}" "${INFERENCE_WORKER_ROOT_VOLUME_SIZE}" "inference-worker"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3. CREATE LOADGEN WORKER MACHINESET

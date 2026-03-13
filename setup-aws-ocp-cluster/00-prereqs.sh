@@ -105,15 +105,15 @@ check_instance_type() {
 
 check "${MASTER_INSTANCE_TYPE} available in ${AWS_ZONE}"          check_instance_type "${MASTER_INSTANCE_TYPE}" "${AWS_ZONE}"
 check "${APP_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"      check_instance_type "${APP_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
-check "${GPU_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"      check_instance_type "${GPU_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
+check "${INFERENCE_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"      check_instance_type "${INFERENCE_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
 check "${LOADGEN_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"  check_instance_type "${LOADGEN_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
 
 # ─── GPU Quota Check ────────────────────────────────────────────────────────
 echo ""
 
-GPU_FAMILY="${GPU_WORKER_INSTANCE_TYPE%%.*}"
+GPU_FAMILY="${INFERENCE_WORKER_INSTANCE_TYPE%%.*}"
 GPU_VCPU=$(aws ec2 describe-instance-types \
-  --instance-types "${GPU_WORKER_INSTANCE_TYPE}" \
+  --instance-types "${INFERENCE_WORKER_INSTANCE_TYPE}" \
   --query "InstanceTypes[0].VCpuInfo.DefaultVCpus" \
   --output text --region "${AWS_REGION}" 2>/dev/null || echo "96")
 
@@ -138,7 +138,7 @@ if [[ -n "$QUOTA_CODE" ]]; then
   if [[ "$GPU_QUOTA" != "unknown" ]]; then
     echo -e "         Current quota: ${GPU_QUOTA} vCPUs"
     if (( $(echo "$GPU_QUOTA >= $GPU_VCPU" | bc -l 2>/dev/null || echo 0) )); then
-      pass "${FAMILY_LABEL} instance quota sufficient (${GPU_QUOTA} >= ${GPU_VCPU} vCPUs needed for ${GPU_WORKER_INSTANCE_TYPE})"
+      pass "${FAMILY_LABEL} instance quota sufficient (${GPU_QUOTA} >= ${GPU_VCPU} vCPUs needed for ${INFERENCE_WORKER_INSTANCE_TYPE})"
     else
       fail "${FAMILY_LABEL} instance quota too low (${GPU_QUOTA} < ${GPU_VCPU} vCPUs) — request increase via AWS console"
     fi
@@ -146,7 +146,7 @@ if [[ -n "$QUOTA_CODE" ]]; then
     skip "Could not check GPU quota — verify manually that you have ≥${GPU_VCPU} vCPU for ${FAMILY_LABEL} instances"
   fi
 else
-  skip "Unknown GPU family '${GPU_FAMILY}' — verify quota manually for ${GPU_WORKER_INSTANCE_TYPE}"
+  skip "Unknown GPU family '${GPU_FAMILY}' — verify quota manually for ${INFERENCE_WORKER_INSTANCE_TYPE}"
 fi
 
 # ─── Files ──────────────────────────────────────────────────────────────────

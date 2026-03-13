@@ -100,14 +100,14 @@ check_profile() {
   ibmcloud is instance-profiles 2>/dev/null | grep -q "${profile}"
 }
 
-check "${GPU_WORKER_INSTANCE_TYPE} profile available"    check_profile "${GPU_WORKER_INSTANCE_TYPE}"
+check "${INFERENCE_WORKER_INSTANCE_TYPE} profile available"    check_profile "${INFERENCE_WORKER_INSTANCE_TYPE}"
 check "${APP_WORKER_INSTANCE_TYPE} profile available"    check_profile "${APP_WORKER_INSTANCE_TYPE}"
 check "${LOADGEN_WORKER_INSTANCE_TYPE} profile available" check_profile "${LOADGEN_WORKER_INSTANCE_TYPE}"
 check "${MASTER_INSTANCE_TYPE} profile available"        check_profile "${MASTER_INSTANCE_TYPE}"
 
 # ─── GPU Quota Check ──────────────────────────────────────────────────────
 info "Checking GPU instance quota..."
-GPU_FAMILY="${GPU_WORKER_INSTANCE_TYPE%%-*}"          # e.g. gx3 from gx3-64x320x4l40s
+GPU_FAMILY="${INFERENCE_WORKER_INSTANCE_TYPE%%-*}"          # e.g. gx3 from gx3-64x320x4l40s
 GPU_QUOTA_CHECK=$(ibmcloud is instance-profiles 2>/dev/null | grep -c "${GPU_FAMILY}" || echo "0")
 if [[ "$GPU_QUOTA_CHECK" -ge 1 ]]; then
   ok "GPU instance profiles (${GPU_FAMILY}) are available in this region"

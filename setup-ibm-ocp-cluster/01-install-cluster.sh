@@ -68,7 +68,7 @@ compute:
     replicas: 1
     platform:
       ibmcloud:
-        type: ${GPU_WORKER_INSTANCE_TYPE}
+        type: ${INFERENCE_WORKER_INSTANCE_TYPE}
         zones:
           - ${IBMCLOUD_ZONE}
   - name: loadgen-worker

@@ -32,7 +32,7 @@ APP_NODE=$(oc get nodes \
 
 # Inference worker: identified by GPU/inference instance type
 INFERENCE_NODE=$(oc get nodes \
-  -l "node.kubernetes.io/instance-type=${GPU_WORKER_INSTANCE_TYPE}" \
+  -l "node.kubernetes.io/instance-type=${INFERENCE_WORKER_INSTANCE_TYPE}" \
   --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
 
 # Load-gen worker: identified by its instance type
@@ -42,7 +42,7 @@ LOADGEN_NODE=$(oc get nodes \
 
 # ─── Validate detection ──────────────────────────────────────────────────
 [[ -n "$APP_NODE" ]]     || bail "Could not find app worker node (${APP_WORKER_INSTANCE_TYPE})"
-[[ -n "$INFERENCE_NODE" ]] || bail "Could not find inference worker node (${GPU_WORKER_INSTANCE_TYPE})"
+[[ -n "$INFERENCE_NODE" ]] || bail "Could not find inference worker node (${INFERENCE_WORKER_INSTANCE_TYPE})"
 [[ -n "$LOADGEN_NODE" ]] || bail "Could not find load-gen worker node (${LOADGEN_WORKER_INSTANCE_TYPE})"
 
 info "Detected nodes:"
