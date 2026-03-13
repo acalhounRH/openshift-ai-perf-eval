@@ -111,42 +111,46 @@ check "${LOADGEN_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"  check_instance
 # ─── GPU Quota Check ────────────────────────────────────────────────────────
 echo ""
 
-GPU_FAMILY="${INFERENCE_WORKER_INSTANCE_TYPE%%.*}"
-GPU_VCPU=$(aws ec2 describe-instance-types \
-  --instance-types "${INFERENCE_WORKER_INSTANCE_TYPE}" \
-  --query "InstanceTypes[0].VCpuInfo.DefaultVCpus" \
-  --output text --region "${AWS_REGION}" 2>/dev/null || echo "96")
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  info "Simulator mode — skipping GPU quota check (inference worker is ${INFERENCE_WORKER_INSTANCE_TYPE})"
+else
+  GPU_FAMILY="${INFERENCE_WORKER_INSTANCE_TYPE%%.*}"
+  GPU_VCPU=$(aws ec2 describe-instance-types \
+    --instance-types "${INFERENCE_WORKER_INSTANCE_TYPE}" \
+    --query "InstanceTypes[0].VCpuInfo.DefaultVCpus" \
+    --output text --region "${AWS_REGION}" 2>/dev/null || echo "96")
 
-case "${GPU_FAMILY}" in
-  g5|g5g|g6)  QUOTA_CODE="L-DB2E81BA"; FAMILY_LABEL="G and VT" ;;
-  p4d|p4de)   QUOTA_CODE="L-417A185B"; FAMILY_LABEL="P" ;;
-  p5*)        QUOTA_CODE="L-417A185B"; FAMILY_LABEL="P" ;;
-  *)          QUOTA_CODE=""; FAMILY_LABEL="unknown" ;;
-esac
+  case "${GPU_FAMILY}" in
+    g5|g5g|g6)  QUOTA_CODE="L-DB2E81BA"; FAMILY_LABEL="G and VT" ;;
+    p4d|p4de)   QUOTA_CODE="L-417A185B"; FAMILY_LABEL="P" ;;
+    p5*)        QUOTA_CODE="L-417A185B"; FAMILY_LABEL="P" ;;
+    *)          QUOTA_CODE=""; FAMILY_LABEL="unknown" ;;
+  esac
 
-info "GPU instance quota (${GPU_FAMILY} → ${FAMILY_LABEL} family, needs ${GPU_VCPU} vCPUs)"
-echo "  ────────────────────────────────────────"
+  info "GPU instance quota (${GPU_FAMILY} → ${FAMILY_LABEL} family, needs ${GPU_VCPU} vCPUs)"
+  echo "  ────────────────────────────────────────"
 
-if [[ -n "$QUOTA_CODE" ]]; then
-  GPU_QUOTA=$(aws service-quotas get-service-quota \
-    --service-code ec2 \
-    --quota-code "${QUOTA_CODE}" \
-    --region "${AWS_REGION}" \
-    --query "Quota.Value" \
-    --output text 2>/dev/null || echo "unknown")
+  if [[ -n "$QUOTA_CODE" ]]; then
+    GPU_QUOTA=$(aws service-quotas get-service-quota \
+      --service-code ec2 \
+      --quota-code "${QUOTA_CODE}" \
+      --region "${AWS_REGION}" \
+      --query "Quota.Value" \
+      --output text 2>/dev/null || echo "unknown")
 
-  if [[ "$GPU_QUOTA" != "unknown" ]]; then
-    echo -e "         Current quota: ${GPU_QUOTA} vCPUs"
-    if (( $(echo "$GPU_QUOTA >= $GPU_VCPU" | bc -l 2>/dev/null || echo 0) )); then
-      pass "${FAMILY_LABEL} instance quota sufficient (${GPU_QUOTA} >= ${GPU_VCPU} vCPUs needed for ${INFERENCE_WORKER_INSTANCE_TYPE})"
+    if [[ "$GPU_QUOTA" != "unknown" ]]; then
+      echo -e "         Current quota: ${GPU_QUOTA} vCPUs"
+      if (( $(echo "$GPU_QUOTA >= $GPU_VCPU" | bc -l 2>/dev/null || echo 0) )); then
+        pass "${FAMILY_LABEL} instance quota sufficient (${GPU_QUOTA} >= ${GPU_VCPU} vCPUs needed for ${INFERENCE_WORKER_INSTANCE_TYPE})"
+      else
+        fail "${FAMILY_LABEL} instance quota too low (${GPU_QUOTA} < ${GPU_VCPU} vCPUs) — request increase via AWS console"
+      fi
     else
-      fail "${FAMILY_LABEL} instance quota too low (${GPU_QUOTA} < ${GPU_VCPU} vCPUs) — request increase via AWS console"
+      skip "Could not check GPU quota — verify manually that you have ≥${GPU_VCPU} vCPU for ${FAMILY_LABEL} instances"
     fi
   else
-    skip "Could not check GPU quota — verify manually that you have ≥${GPU_VCPU} vCPU for ${FAMILY_LABEL} instances"
+    skip "Unknown GPU family '${GPU_FAMILY}' — verify quota manually for ${INFERENCE_WORKER_INSTANCE_TYPE}"
   fi
-else
-  skip "Unknown GPU family '${GPU_FAMILY}' — verify quota manually for ${INFERENCE_WORKER_INSTANCE_TYPE}"
 fi
 
 # ─── Files ──────────────────────────────────────────────────────────────────

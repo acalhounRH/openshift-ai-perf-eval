@@ -106,18 +106,22 @@ check "${LOADGEN_WORKER_INSTANCE_TYPE} profile available" check_profile "${LOADG
 check "${MASTER_INSTANCE_TYPE} profile available"        check_profile "${MASTER_INSTANCE_TYPE}"
 
 # ─── GPU Quota Check ──────────────────────────────────────────────────────
-info "Checking GPU instance quota..."
-GPU_FAMILY="${INFERENCE_WORKER_INSTANCE_TYPE%%-*}"          # e.g. gx3 from gx3-64x320x4l40s
-GPU_QUOTA_CHECK=$(ibmcloud is instance-profiles 2>/dev/null | grep -c "${GPU_FAMILY}" || echo "0")
-if [[ "$GPU_QUOTA_CHECK" -ge 1 ]]; then
-  ok "GPU instance profiles (${GPU_FAMILY}) are available in this region"
-  PASS=$((PASS + 1))
-  info "  Note: GPU instances may require explicit quota approval."
-  info "  Check: https://cloud.ibm.com/docs/vpc?topic=vpc-quotas"
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  info "Simulator mode — skipping GPU quota check (inference worker is ${INFERENCE_WORKER_INSTANCE_TYPE})"
 else
-  warn "No ${GPU_FAMILY} GPU profiles found. GPU instances may not be available in ${IBMCLOUD_REGION}."
-  warn "Submit a quota request if needed."
-  FAIL=$((FAIL + 1))
+  info "Checking GPU instance quota..."
+  GPU_FAMILY="${INFERENCE_WORKER_INSTANCE_TYPE%%-*}"          # e.g. gx3 from gx3-64x320x4l40s
+  GPU_QUOTA_CHECK=$(ibmcloud is instance-profiles 2>/dev/null | grep -c "${GPU_FAMILY}" || echo "0")
+  if [[ "$GPU_QUOTA_CHECK" -ge 1 ]]; then
+    ok "GPU instance profiles (${GPU_FAMILY}) are available in this region"
+    PASS=$((PASS + 1))
+    info "  Note: GPU instances may require explicit quota approval."
+    info "  Check: https://cloud.ibm.com/docs/vpc?topic=vpc-quotas"
+  else
+    warn "No ${GPU_FAMILY} GPU profiles found. GPU instances may not be available in ${IBMCLOUD_REGION}."
+    warn "Submit a quota request if needed."
+    FAIL=$((FAIL + 1))
+  fi
 fi
 
 # ─── Files ──────────────────────────────────────────────────────────────────
