@@ -106,6 +106,8 @@ check_instance_type() {
 check "${MASTER_INSTANCE_TYPE} available in ${AWS_ZONE}"          check_instance_type "${MASTER_INSTANCE_TYPE}" "${AWS_ZONE}"
 check "${APP_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"      check_instance_type "${APP_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
 check "${INFERENCE_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"      check_instance_type "${INFERENCE_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
+check "${TOOLS_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"    check_instance_type "${TOOLS_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
+check "${RAG_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"      check_instance_type "${RAG_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
 check "${LOADGEN_WORKER_INSTANCE_TYPE} available in ${AWS_ZONE}"  check_instance_type "${LOADGEN_WORKER_INSTANCE_TYPE}" "${AWS_ZONE}"
 
 # ─── GPU Quota Check ────────────────────────────────────────────────────────

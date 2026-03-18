@@ -22,8 +22,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source config.env if available; otherwise define standalone defaults
-if [[ -f "${SCRIPT_DIR}/config.env" ]]; then
-  source "${SCRIPT_DIR}/config.env"
+if [[ -f "${CONFIG_ENV:-${SCRIPT_DIR}/config.env}" ]]; then
+  source "${CONFIG_ENV:-${SCRIPT_DIR}/config.env}"
 else
   export PERF_NAMESPACE="${PERF_NAMESPACE:-perf-testing}"
   info()  { echo -e "\033[0;34m[INFO]\033[0m  $*"; }
@@ -36,7 +36,7 @@ fi
 GRAFANA_NS="${PERF_NAMESPACE}"
 GRAFANA_SA="grafana"
 
-ALL_DASHBOARD_CMS="grafana-datasources grafana-dashboards grafana-dashboard-ocp grafana-dashboard-gpu grafana-dashboard-llm grafana-dashboard-perf-eval grafana-dashboard-llamastack grafana-dashboard-responses-api grafana-dashboard-traces grafana-dashboard-perf-eng"
+ALL_DASHBOARD_CMS="grafana-datasources grafana-dashboards grafana-dashboard-ocp grafana-dashboard-gpu grafana-dashboard-llm grafana-dashboard-perf-eval grafana-dashboard-llamastack grafana-dashboard-responses-api grafana-dashboard-traces grafana-dashboard-perf-eng grafana-dashboard-instance-resources"
 
 # ─── Teardown mode ─────────────────────────────────────────────────────────
 if [[ "${1:-}" == "teardown" ]]; then
@@ -1035,7 +1035,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "GenAI Chat Latency (p50 / p95 / p99)",
+          "title": "Llama Stack — GenAI Chat Latency (p50 / p95 / p99)",
           "description": "End-to-end latency of Llama Stack chat completions (client-side, includes vLLM round-trip)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
@@ -1048,7 +1048,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
         },
         {
-          "title": "Token Throughput (input vs output)",
+          "title": "Llama Stack — Token Throughput (input vs output)",
           "description": "Rate of tokens processed, split by input (prompt) and output (completion)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
@@ -1060,7 +1060,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Avg Tokens per Request",
+          "title": "Llama Stack — Avg Tokens per Request",
           "description": "Average number of input and output tokens per chat completion request",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
@@ -1072,7 +1072,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Chat Completion Request Rate",
+          "title": "Llama Stack — Chat Completion Request Rate",
           "description": "Successful and failed chat completion requests per second",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
@@ -1083,7 +1083,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "GenAI Avg Latency",
+          "title": "Llama Stack — GenAI Avg Latency",
           "description": "Average chat completion latency (simpler view for trending)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
@@ -1100,7 +1100,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "API Request Rate by Endpoint",
+          "title": "Llama Stack — API Request Rate by Endpoint",
           "description": "HTTP requests/sec broken down by API endpoint",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
@@ -1111,7 +1111,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "API Latency by Endpoint (p95)",
+          "title": "Llama Stack — API Latency by Endpoint (p95)",
           "description": "95th percentile HTTP server latency for each Llama Stack endpoint",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
@@ -1122,7 +1122,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
-          "title": "Active Requests & Error Rate",
+          "title": "Llama Stack — Active Requests & Error Rate",
           "description": "In-flight HTTP requests and non-2xx responses per second",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
@@ -1134,7 +1134,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Request & Response Sizes (p95)",
+          "title": "Llama Stack — Request & Response Sizes (p95)",
           "description": "95th percentile HTTP request and response body sizes",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
@@ -1146,7 +1146,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Upstream vLLM Latency (p50 / p95)",
+          "title": "Llama Stack — Upstream vLLM Latency (p50 / p95)",
           "description": "Llama Stack → vLLM HTTP client latency (outbound calls to inference backend)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
@@ -1164,7 +1164,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "PostgreSQL Connection Pool",
+          "title": "Llama Stack — PostgreSQL Connection Pool",
           "description": "Active and idle connections in the Llama Stack asyncpg connection pool",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 35 },
@@ -1176,7 +1176,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "PostgreSQL Connection Pool (stacked)",
+          "title": "Llama Stack — PostgreSQL Connection Pool (stacked)",
           "description": "Total pool size as stacked area — used + idle",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 35 },
@@ -1194,7 +1194,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "CPU Utilization",
+          "title": "Llama Stack — CPU Utilization",
           "description": "Llama Stack Python process CPU usage ratio",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 0, "y": 43 },
@@ -1205,7 +1205,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] }
         },
         {
-          "title": "Memory Usage",
+          "title": "Llama Stack — Memory Usage",
           "description": "RSS and virtual memory of the Llama Stack process",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 8, "y": 43 },
@@ -1217,7 +1217,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Threads & File Descriptors",
+          "title": "Llama Stack — Threads & File Descriptors",
           "description": "Llama Stack process thread count and open file descriptors",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 43 },
@@ -1229,7 +1229,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "CPU Time (user + system)",
+          "title": "Llama Stack — CPU Time (user + system)",
           "description": "Cumulative CPU time consumed by the Llama Stack process",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 50 },
@@ -1240,7 +1240,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Context Switches",
+          "title": "Llama Stack — Context Switches",
           "description": "Voluntary and involuntary context switches per second",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 50 },
@@ -1257,7 +1257,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "Asyncio Coroutine Rate",
+          "title": "Llama Stack — Asyncio Coroutine Rate",
           "description": "Rate of asyncio coroutines created (key async operations in Llama Stack)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 58 },
@@ -1268,7 +1268,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
         },
         {
-          "title": "GC Collections & Objects",
+          "title": "Llama Stack — GC Collections & Objects",
           "description": "Python garbage collector activity — collections per second and collected objects",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 58 },
@@ -1321,7 +1321,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "End-to-End Response Latency (p50 / p95 / p99)",
+          "title": "Llama Stack — End-to-End Response Latency (p50 / p95 / p99)",
           "description": "Total time from Responses API request to complete response — includes Llama Stack processing, vLLM inference, DB writes, and tool orchestration",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
@@ -1334,7 +1334,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] }
         },
         {
-          "title": "Latency Breakdown: Llama Stack Overhead vs vLLM Inference",
+          "title": "Llama Stack — Latency Breakdown vs vLLM Inference",
           "description": "Decomposes total API latency into vLLM inference time and Llama Stack processing overhead (routing, DB writes, formatting). Overhead = total − vLLM.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
@@ -1391,7 +1391,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "Request Rate",
+          "title": "Llama Stack — Request Rate",
           "description": "Responses API requests per second — overall throughput capacity",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
@@ -1402,7 +1402,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "Token Throughput (input vs output)",
+          "title": "Llama Stack — Token Throughput (input vs output)",
           "description": "Token processing rate — input (prompt) and output (completion) tokens per second",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
@@ -1415,7 +1415,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Avg Tokens per Request",
+          "title": "Llama Stack — Avg Tokens per Request",
           "description": "Average input and output token counts per request — characterizes workload profile",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
@@ -1427,7 +1427,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "API Request/Response Payload Sizes (p95)",
+          "title": "Llama Stack — API Request/Response Payload Sizes (p95)",
           "description": "95th percentile HTTP body sizes — useful for capacity planning and network bandwidth evaluation",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
@@ -1439,7 +1439,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Error Rate & Active Requests",
+          "title": "Llama Stack — Error Rate & Active Requests",
           "description": "Non-2xx error rate and concurrent in-flight requests — key for reliability and saturation assessment",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
@@ -1591,7 +1591,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "Connection Pool: Active vs Idle",
+          "title": "Llama Stack — Connection Pool: Active vs Idle",
           "description": "Llama Stack asyncpg pool — if 'used' stays high or equals pool max, DB is a bottleneck. Responses API stores conversation state and tool results here.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
@@ -1604,7 +1604,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15 } }, "overrides": [{ "matcher": { "id": "byName", "options": "pool total" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash" } }, { "id": "color", "value": { "fixedColor": "white", "mode": "fixed" } }] }] }
         },
         {
-          "title": "Connection Pool Utilization (%)",
+          "title": "Llama Stack — Connection Pool Utilization (%)",
           "description": "Percentage of pool capacity in use — sustained >80% indicates pool saturation risk and potential tail latency",
           "type": "gauge",
           "gridPos": { "h": 8, "w": 6, "x": 12, "y": 68 },
@@ -1615,7 +1615,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":60},{"color":"orange","value":80},{"color":"red","value":95}] } }, "overrides": [] }
         },
         {
-          "title": "Async DB Coroutine Rate",
+          "title": "Llama Stack — Async DB Coroutine Rate",
           "description": "Rate of key database-touching async operations — store_chat_completion writes conversation state per response",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 6, "x": 18, "y": 68 },
@@ -1633,7 +1633,7 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack Process CPU",
+          "title": "Llama Stack — Process CPU",
           "description": "CPU utilization of the Llama Stack Python process — should stay low; sustained >50% indicates the API layer is CPU-bound",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 0, "y": 77 },
@@ -1644,7 +1644,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "percent", "min": 0 }, "overrides": [] }
         },
         {
-          "title": "Llama Stack Process Memory",
+          "title": "Llama Stack — Process Memory",
           "description": "RSS and virtual memory — watch for growth over time (memory leaks under sustained load)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 8, "y": 77 },
@@ -1656,7 +1656,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Threads, FDs & Context Switches",
+          "title": "Llama Stack — Threads, FDs & Context Switches",
           "description": "Process-level resource consumption — thread explosion or FD exhaustion causes hard failures",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 77 },
@@ -2313,6 +2313,233 @@ CONFIGMAP_EOF
 
 ok "8 dashboards created (OCP, GPU, LLM, Perf Eval, Llama Stack Deep Dive, Responses API Eval, Distributed Traces, Perf Engineering Eval)"
 
+# ── 9. Per-Process Resource Utilization (by node role) ─────────────────────
+info "Creating Per-Process Instance Resource Utilization dashboard..."
+
+cat <<'CONFIGMAP_EOF' | sed "s/GRAFANA_NS_PLACEHOLDER/${GRAFANA_NS}/g" | oc apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-instance-resources
+  namespace: GRAFANA_NS_PLACEHOLDER
+data:
+  instance-resources.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "graphTooltip": 1,
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "templating": {
+        "list": [
+          {
+            "allValue": "",
+            "current": {},
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "definition": "label_values(kube_node_role, role)",
+            "hide": 0,
+            "includeAll": true,
+            "label": "Node Role",
+            "multi": true,
+            "name": "node_role",
+            "options": [],
+            "query": { "query": "label_values(kube_node_role, role)", "refId": "A" },
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": false,
+            "sort": 1,
+            "type": "query"
+          },
+          {
+            "allValue": "",
+            "current": {},
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "definition": "label_values(kube_pod_info, namespace)",
+            "hide": 0,
+            "includeAll": true,
+            "label": "Namespace",
+            "multi": true,
+            "name": "namespace",
+            "options": [],
+            "query": { "query": "label_values(kube_pod_info, namespace)", "refId": "B" },
+            "refresh": 2,
+            "regex": "/^(?!openshift-|kube-|default$).*/",
+            "skipUrlSync": false,
+            "sort": 1,
+            "type": "query"
+          }
+        ]
+      },
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 100,
+          "title": "$node_role",
+          "type": "row",
+          "repeat": "node_role",
+          "repeatDirection": "h"
+        },
+        {
+          "title": "Container CPU Utilization (%) — $node_role",
+          "description": "CPU usage per container as % of node allocatable CPU. Stacked to 100% = node fully utilized.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 1 },
+          "id": 101,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "fillOpacity": 20, "lineWidth": 2, "spanNulls": true, "stacking": { "mode": "normal" }, "showPoints": "never" } },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max", "lastNotNull"], "placement": "bottom", "sortBy": "Max", "sortDesc": true } },
+          "targets": [
+            {
+              "expr": "100 * sum(rate(container_cpu_usage_seconds_total{container!=\"\", container!=\"POD\"}[5m]) * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (container, pod, node) / on(node) group_left() kube_node_status_allocatable{resource=\"cpu\"} * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{container}} ({{pod}})"
+            }
+          ]
+        },
+        {
+          "title": "Container Memory Working Set — $node_role",
+          "description": "Active memory per container. Dashed line = node allocatable memory.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 1 },
+          "id": 102,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "bytes", "min": 0, "custom": { "fillOpacity": 20, "lineWidth": 2, "spanNulls": true, "stacking": { "mode": "normal" }, "showPoints": "never" } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*capacity.*" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } }, { "id": "custom.lineWidth", "value": 2 }, { "id": "custom.fillOpacity", "value": 0 }, { "id": "custom.stacking", "value": { "mode": "none" } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max", "lastNotNull"], "placement": "bottom", "sortBy": "Max", "sortDesc": true } },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{container!=\"\", container!=\"POD\"} * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (container, pod, node) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{container}} ({{pod}})"
+            },
+            {
+              "expr": "kube_node_status_allocatable{resource=\"memory\"} * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{node}} capacity"
+            }
+          ]
+        },
+        {
+          "title": "CPU Throttling by Container — $node_role",
+          "description": "Percentage of CPU periods where a container was throttled. High throttling = container hitting its CPU limit.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 10 },
+          "id": 103,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "fillOpacity": 10, "lineWidth": 2, "spanNulls": true, "showPoints": "never", "thresholdsStyle": { "mode": "line" } }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.25 }, { "color": "red", "value": 0.5 }] } },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max"], "placement": "bottom", "sortBy": "Max", "sortDesc": true } },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{container!=\"\", container!=\"POD\"}[5m]) / rate(container_cpu_cfs_periods_total{container!=\"\", container!=\"POD\"}[5m]) * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (container, pod, node) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{container}} ({{pod}})"
+            }
+          ]
+        },
+        {
+          "title": "Memory vs Limit — $node_role",
+          "description": "Memory usage as a fraction of each container's memory limit. Approaching 1.0 = risk of OOM kill.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 10 },
+          "id": 104,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "fillOpacity": 10, "lineWidth": 2, "spanNulls": true, "showPoints": "never", "thresholdsStyle": { "mode": "line" } }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "red", "value": 0.9 }] } },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max"], "placement": "bottom", "sortBy": "Max", "sortDesc": true } },
+          "targets": [
+            {
+              "expr": "(sum by (container, pod, namespace) (container_memory_working_set_bytes{container!=\"\", container!=\"POD\", namespace=~\"$namespace\"}) / sum by (container, pod, namespace) (kube_pod_container_resource_limits{resource=\"memory\", namespace=~\"$namespace\"})) * on(namespace, pod) group_left(node) topk by (namespace, pod) (1, kube_pod_info{namespace=~\"$namespace\"}) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{container}} ({{pod}})"
+            }
+          ]
+        },
+        {
+          "title": "Container Network I/O — $node_role",
+          "description": "TX (positive) and RX (negative) per pod. Identifies network-heavy processes.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 19 },
+          "id": 105,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "Bps", "custom": { "fillOpacity": 15, "lineWidth": 2, "spanNulls": true, "showPoints": "never" } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*RX$" }, "properties": [{ "id": "custom.transform", "value": "negative-Y" }] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max"], "placement": "bottom", "sortBy": "Max", "sortDesc": true } },
+          "targets": [
+            {
+              "expr": "sum(rate(container_network_transmit_bytes_total{interface!~\"lo|veth.*\"}[5m]) * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (pod, node) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{pod}} TX"
+            },
+            {
+              "expr": "sum(rate(container_network_receive_bytes_total{interface!~\"lo|veth.*\"}[5m]) * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (pod, node) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{pod}} RX"
+            }
+          ]
+        },
+        {
+          "title": "Container Filesystem I/O — $node_role",
+          "description": "Read/write throughput per container. Helps identify disk-heavy processes.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 28 },
+          "id": 106,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "Bps", "custom": { "fillOpacity": 10, "lineWidth": 2, "spanNulls": true, "showPoints": "never" } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*write.*" }, "properties": [{ "id": "custom.transform", "value": "negative-Y" }] }
+            ]
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max"], "placement": "bottom", "sortBy": "Max", "sortDesc": true } },
+          "targets": [
+            {
+              "expr": "sum(rate(container_fs_reads_bytes_total{container!=\"\", container!=\"POD\"}[5m]) * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (container, pod, node) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{container}} ({{pod}}) read"
+            },
+            {
+              "expr": "sum(rate(container_fs_writes_bytes_total{container!=\"\", container!=\"POD\"}[5m]) * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (container, pod, node) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{container}} ({{pod}}) write"
+            }
+          ]
+        },
+        {
+          "title": "Container Restarts — $node_role",
+          "description": "Cumulative restart count per container. Spikes indicate crashes or OOM kills.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 28 },
+          "id": 107,
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "short", "min": 0, "custom": { "fillOpacity": 0, "lineWidth": 2, "spanNulls": true, "showPoints": "auto", "pointSize": 5 } },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "table", "calcs": ["lastNotNull", "max"], "placement": "bottom", "sortBy": "Last *", "sortDesc": true } },
+          "targets": [
+            {
+              "expr": "sum(kube_pod_container_status_restarts_total * on(namespace, pod) group_left(node) kube_pod_info{namespace=~\"$namespace\"}) by (container, pod, node) * on(node) group_left() label_replace(kube_node_role{role=~\"$node_role\"}, \"node\", \"$1\", \"node\", \"(.*)\")",
+              "legendFormat": "{{container}} ({{pod}})"
+            }
+          ]
+        }
+      ],
+      "time": { "from": "now-30m", "to": "now" },
+      "title": "Per-Process Instance Utilization",
+      "uid": "instance-resources"
+    }
+CONFIGMAP_EOF
+
+ok "Per-Process Instance Resource Utilization dashboard created"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 7. DEPLOY GRAFANA
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2345,9 +2572,9 @@ spec:
           name: http
         env:
         - name: GF_SECURITY_ADMIN_USER
-          value: "admin"
+          value: "${GRAFANA_ADMIN_USER:-admin}"
         - name: GF_SECURITY_ADMIN_PASSWORD
-          value: "admin"
+          value: "${GRAFANA_ADMIN_PASSWORD:-admin}"
         - name: GF_USERS_ALLOW_SIGN_UP
           value: "false"
         - name: GF_AUTH_ANONYMOUS_ENABLED
@@ -2382,6 +2609,8 @@ spec:
           mountPath: /var/lib/grafana/dashboards/traces
         - name: dashboard-perf-eng
           mountPath: /var/lib/grafana/dashboards/perf-eng
+        - name: dashboard-instance-resources
+          mountPath: /var/lib/grafana/dashboards/instance-resources
         readinessProbe:
           httpGet:
             path: /api/health
@@ -2425,6 +2654,9 @@ spec:
       - name: dashboard-perf-eng
         configMap:
           name: grafana-dashboard-perf-eng
+      - name: dashboard-instance-resources
+        configMap:
+          name: grafana-dashboard-instance-resources
 ---
 apiVersion: v1
 kind: Service

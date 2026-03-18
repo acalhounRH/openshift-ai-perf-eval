@@ -4,6 +4,7 @@ cluster-*/
 
 # Per-user config files (contain real domains, cluster names, API key refs)
 config.env
+config-*.env
 
 # Reports (may contain internal URLs and cluster-specific details)
 reports/

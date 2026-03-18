@@ -4,7 +4,7 @@
 # ============================================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/config.env"
+source "${CONFIG_ENV:-${SCRIPT_DIR}/config.env}"
 
 echo ""
 echo "============================================"
@@ -223,11 +223,11 @@ spec:
         - "8000"
         - "--mode"
         - "${SIMULATOR_MODE}"
-        - "--ttft"
-        - "${SIMULATOR_TTFT_MS}"
-        - "--itl"
-        - "${SIMULATOR_ITL_MS}"
-        - "--max-tokens"
+        - "--time-to-first-token"
+        - "${SIMULATOR_TTFT_MS}ms"
+        - "--inter-token-latency"
+        - "${SIMULATOR_ITL_MS}ms"
+        - "--max-model-len"
         - "${SIMULATOR_MAX_TOKENS}"
         ports:
         - containerPort: 8000
@@ -347,12 +347,12 @@ spec:
         resources:
           requests:
             nvidia.com/gpu: "${TENSOR_PARALLEL_SIZE}"
-            cpu: "16"
-            memory: "200Gi"
+            cpu: "${VLLM_CPU_REQUEST:-4}"
+            memory: "${VLLM_MEM_REQUEST:-16Gi}"
           limits:
             nvidia.com/gpu: "${TENSOR_PARALLEL_SIZE}"
-            cpu: "64"
-            memory: "600Gi"
+            cpu: "${VLLM_CPU_LIMIT:-8}"
+            memory: "${VLLM_MEM_LIMIT:-28Gi}"
         volumeMounts:
         - name: model-storage
           mountPath: /root/.cache/huggingface
@@ -381,7 +381,7 @@ spec:
       - name: shm
         emptyDir:
           medium: Memory
-          sizeLimit: "64Gi"
+          sizeLimit: "${VLLM_SHM_SIZE:-8Gi}"
 ---
 apiVersion: v1
 kind: Service
@@ -862,7 +862,7 @@ spec:
         app: kubernetes-mcp-server
     spec:
       nodeSelector:
-        node-role.kubernetes.io/app-worker: ""
+        node-role.kubernetes.io/tools-worker: ""
       serviceAccountName: kubernetes-mcp-sa
       containers:
       - name: mcp

@@ -4,7 +4,7 @@
 # ============================================================================
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/config.env"
+source "${CONFIG_ENV:-${SCRIPT_DIR}/config.env}"
 # Intentionally no set -e: this script must run ALL checks and report a summary.
 
 echo ""
@@ -50,11 +50,7 @@ check_warn() {
 info "── Cluster Health ──"
 
 NODE_COUNT=$(oc get nodes --no-headers 2>/dev/null | grep -c "Ready" || echo 0)
-if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
-  EXPECTED_NODES=5
-else
-  EXPECTED_NODES=6
-fi
+EXPECTED_NODES=8
 check "All ${EXPECTED_NODES} nodes are Ready (found: ${NODE_COUNT})" test "${NODE_COUNT}" -eq "${EXPECTED_NODES}"
 
 # Masters have no user pods
@@ -76,6 +72,12 @@ info "── Node Roles ──"
 
 APP_LABELED=$(oc get nodes -l node-role.kubernetes.io/app-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
 check "App worker node labeled (found: ${APP_LABELED})" test "${APP_LABELED}" -ge 1
+
+TOOLS_LABELED=$(oc get nodes -l node-role.kubernetes.io/tools-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
+check "Tools worker node labeled (found: ${TOOLS_LABELED})" test "${TOOLS_LABELED}" -ge 1
+
+RAG_LABELED=$(oc get nodes -l node-role.kubernetes.io/rag-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
+check "RAG worker node labeled (found: ${RAG_LABELED})" test "${RAG_LABELED}" -ge 1
 
 LOADGEN_LABELED=$(oc get nodes -l node-role.kubernetes.io/loadgen-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
 check "Load-gen worker node labeled (found: ${LOADGEN_LABELED})" test "${LOADGEN_LABELED}" -ge 1
@@ -131,7 +133,7 @@ VLLM_PODS=$(oc get pods -l app=vllm-inference -n "${PERF_NAMESPACE}" --no-header
 check_warn "vLLM pod exists (found: ${VLLM_PODS})" test "${VLLM_PODS}" -ge 1
 
 if [[ "${MCP_KUBERNETES_ENABLED}" == "true" ]]; then
-  check_pod_on_node "app=kubernetes-mcp-server" "${APP_WORKER_INSTANCE_TYPE}" "K8s MCP server on app worker"
+  check_pod_on_node "app=kubernetes-mcp-server" "${TOOLS_WORKER_INSTANCE_TYPE}" "K8s MCP server on tools worker"
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

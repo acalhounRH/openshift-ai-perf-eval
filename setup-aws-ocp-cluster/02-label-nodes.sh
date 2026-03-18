@@ -128,22 +128,36 @@ INFERENCE_MS_NAME="${INFRA_ID}-inference-worker-${AWS_ZONE}"
 create_machineset "${INFERENCE_MS_NAME}" "${INFERENCE_WORKER_INSTANCE_TYPE}" "${INFERENCE_WORKER_ROOT_VOLUME_SIZE}" "inference-worker"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 3. CREATE LOADGEN WORKER MACHINESET
+# 3. CREATE TOOLS WORKER MACHINESET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOOLS_MS_NAME="${INFRA_ID}-tools-worker-${AWS_ZONE}"
+create_machineset "${TOOLS_MS_NAME}" "${TOOLS_WORKER_INSTANCE_TYPE}" "${TOOLS_WORKER_ROOT_VOLUME_SIZE}" "tools-worker"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 4. CREATE RAG WORKER MACHINESET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RAG_MS_NAME="${INFRA_ID}-rag-worker-${AWS_ZONE}"
+create_machineset "${RAG_MS_NAME}" "${RAG_WORKER_INSTANCE_TYPE}" "${RAG_WORKER_ROOT_VOLUME_SIZE}" "rag-worker"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 5. CREATE LOADGEN WORKER MACHINESET
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LOADGEN_MS_NAME="${INFRA_ID}-loadgen-worker-${AWS_ZONE}"
 create_machineset "${LOADGEN_MS_NAME}" "${LOADGEN_WORKER_INSTANCE_TYPE}" "${LOADGEN_WORKER_ROOT_VOLUME_SIZE}" "loadgen-worker"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 4. WAIT FOR NEW NODES
+# 6. WAIT FOR NEW NODES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 info "Waiting for new worker nodes to provision (5-10 minutes)..."
 echo ""
 
 for i in $(seq 1 60); do
   INFERENCE_READY=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  TOOLS_READY=$(oc get nodes -l node-role.kubernetes.io/tools-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  RAG_READY=$(oc get nodes -l node-role.kubernetes.io/rag-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
   LOADGEN_READY=$(oc get nodes -l node-role.kubernetes.io/loadgen-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
 
-  if [[ "$INFERENCE_READY" -ge 1 && "$LOADGEN_READY" -ge 1 ]]; then
+  if [[ "$INFERENCE_READY" -ge 1 && "$TOOLS_READY" -ge 1 && "$RAG_READY" -ge 1 && "$LOADGEN_READY" -ge 1 ]]; then
     echo ""
     ok "All worker nodes are ready"
     break
@@ -164,7 +178,7 @@ oc get machinesets -n openshift-machine-api
 echo ""
 
 info "Node roles:"
-oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/loadgen-worker
+oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/tools-worker,node-role.kubernetes.io/rag-worker,node-role.kubernetes.io/loadgen-worker
 echo ""
 
 ok "Node setup complete."

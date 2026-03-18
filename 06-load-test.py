@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import base64
 import csv
 import json
 import math
@@ -183,6 +184,9 @@ class GrafanaAnnotator:
     def __init__(self, namespace: str):
         self.enabled = False
         self.url = None
+        user = os.environ.get("GRAFANA_ADMIN_USER", "admin")
+        pw = os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")
+        self._auth = "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
         try:
             host = oc("get", "route", "grafana", "-n", namespace,
                        "-o", "jsonpath={.spec.host}", check=False)
@@ -193,7 +197,7 @@ class GrafanaAnnotator:
                 ctx.verify_mode = ssl.CERT_NONE
                 req = urllib.request.Request(
                     f"{self.url}/api/annotations",
-                    headers={"Authorization": "Basic YWRtaW46YWRtaW4="},
+                    headers={"Authorization": self._auth},
                 )
                 resp = urllib.request.urlopen(req, context=ctx, timeout=5)
                 if resp.status == 200:
@@ -217,7 +221,7 @@ class GrafanaAnnotator:
             f"{self.url}/api/annotations",
             data=data,
             headers={
-                "Authorization": "Basic YWRtaW46YWRtaW4=",
+                "Authorization": self._auth,
                 "Content-Type": "application/json",
             },
             method="POST",
@@ -320,88 +324,92 @@ class ScaleMetrics:
 # GAUGE metrics are point-in-time values (queue depth, cache %, connections).
 # These are queried as range queries returning the MAX during the level.
 
-RATE_METRICS = {
-    # Llama Stack HTTP server
-    "ls_http_p50_ms": 'histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-    "ls_http_p95_ms": 'histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-    "ls_http_p99_ms": 'histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+def rate_metrics(ns: str) -> dict[str, str]:
+    return {
+        # Llama Stack HTTP server
+        "ls_http_p50_ms": 'histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        "ls_http_p95_ms": 'histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        "ls_http_p99_ms": 'histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
 
-    # Llama Stack HTTP client (LS → vLLM)
-    "ls_client_p50_ms": 'histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-    "ls_client_p95_ms": 'histogram_quantile(0.95, sum(rate(http_client_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        # Llama Stack HTTP client (LS → vLLM)
+        "ls_client_p50_ms": 'histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        "ls_client_p95_ms": 'histogram_quantile(0.95, sum(rate(http_client_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
 
-    # Llama Stack: token throughput
-    "ls_tok_in_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="llama-stack",gen_ai_token_type="input"}}[{window}]))',
-    "ls_tok_out_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="llama-stack",gen_ai_token_type="output"}}[{window}]))',
+        # Llama Stack: token throughput
+        "ls_tok_in_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="llama-stack",gen_ai_token_type="input"}}[{window}]))',
+        "ls_tok_out_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="llama-stack",gen_ai_token_type="output"}}[{window}]))',
 
-    # Llama Stack: async operations
-    "ls_async_store_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="store_chat_completion"}}[{window}]))',
-    "ls_async_connect_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="try_connect"}}[{window}]))',
-    "ls_async_close_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="close"}}[{window}]))',
+        # Llama Stack: async operations
+        "ls_async_store_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="store_chat_completion"}}[{window}]))',
+        "ls_async_connect_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="try_connect"}}[{window}]))',
+        "ls_async_close_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="close"}}[{window}]))',
 
-    # Llama Stack: payload sizes
-    "ls_req_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_request_size_bytes_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-    "ls_resp_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_response_size_bytes_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        # Llama Stack: payload sizes
+        "ls_req_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_request_size_bytes_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        "ls_resp_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_response_size_bytes_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
 
-    # GenAI operation duration
-    "genai_dur_p50_s": 'histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-    "genai_dur_p95_s": 'histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        # GenAI operation duration
+        "genai_dur_p50_s": 'histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        "genai_dur_p95_s": 'histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
 
-    # vLLM engine
-    "_vllm_ttft_s": 'histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket[{window}])) by (le))',
-    "_vllm_tpot_s": 'histogram_quantile(0.50, sum(rate(vllm:time_per_output_token_seconds_bucket[{window}])) by (le))',
-    "vllm_e2e_p50_s": 'histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[{window}])) by (le))',
-    "vllm_e2e_p95_s": 'histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[{window}])) by (le))',
-    "vllm_out_tok_s": 'sum(rate(vllm:generation_tokens_total[{window}]))',
+        # vLLM engine
+        "_vllm_ttft_s": 'histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket[{window}])) by (le))',
+        "_vllm_tpot_s": 'histogram_quantile(0.50, sum(rate(vllm:time_per_output_token_seconds_bucket[{window}])) by (le))',
+        "vllm_e2e_p50_s": 'histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[{window}])) by (le))',
+        "vllm_e2e_p95_s": 'histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[{window}])) by (le))',
+        "vllm_out_tok_s": 'sum(rate(vllm:generation_tokens_total[{window}]))',
 
-    # Process CPU (rate-based)
-    "vllm_pod_cpu": 'sum(rate(container_cpu_usage_seconds_total{{namespace="perf-testing",pod=~"vllm.*",container!=""}}[{window}]))',
-    "ls_pod_cpu": 'sum(rate(container_cpu_usage_seconds_total{{namespace="perf-testing",pod=~"llama-stack.*",container!=""}}[{window}]))',
-    "pg_pod_cpu": 'sum(rate(container_cpu_usage_seconds_total{{namespace="perf-testing",pod=~"postgresql.*",container!=""}}[{window}]))',
-    "otel_pod_cpu": 'sum(rate(container_cpu_usage_seconds_total{{namespace="perf-testing",pod=~"otel.*",container!=""}}[{window}]))',
+        # Process CPU (rate-based)
+        "vllm_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"vllm.*",container!=""}}}}[{{window}}]))',
+        "ls_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"llama-stack.*",container!=""}}}}[{{window}}]))',
+        "pg_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"postgresql.*",container!=""}}}}[{{window}}]))',
+        "otel_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"otel.*",container!=""}}}}[{{window}}]))',
 
-    # Node CPU (rate-based)
-    "node_app_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_app_worker=""}},"instance","$1","node","(.+)"))',
-    "node_inference_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_inference_worker=""}},"instance","$1","node","(.+)"))',
-    "node_loadgen_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_loadgen_worker=""}},"instance","$1","node","(.+)"))',
-    "node_cp_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_master=""}},"instance","$1","node","(.+)"))',
-}
+        # Node CPU (rate-based)
+        "node_app_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_app_worker=""}},"instance","$1","node","(.+)"))',
+        "node_inference_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_inference_worker=""}},"instance","$1","node","(.+)"))',
+        "node_loadgen_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_loadgen_worker=""}},"instance","$1","node","(.+)"))',
+        "node_cp_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_master=""}},"instance","$1","node","(.+)"))',
+    }
 
-GAUGE_METRICS = {
-    # Llama Stack: gauges (point-in-time, take max during level)
-    "ls_active_reqs": 'http_server_active_requests{service_name="llama-stack"}',
-    "ls_db_used": 'db_client_connections_usage{service_name="llama-stack",state="used"}',
-    "ls_db_idle": 'db_client_connections_usage{service_name="llama-stack",state="idle"}',
-    "ls_cpu_ratio": 'process_cpu_utilization_ratio{service_name="llama-stack"}',
-    "ls_threads": 'process_thread_count{service_name="llama-stack"}',
-    "ls_fds": 'process_open_file_descriptor_count{service_name="llama-stack"}',
 
-    # vLLM gauges
-    "vllm_kv_cache_pct": 'vllm:gpu_cache_usage_perc * 100',
-    "vllm_running": 'vllm:num_requests_running',
-    "vllm_waiting": 'vllm:num_requests_waiting',
+def gauge_metrics(ns: str) -> dict[str, str]:
+    return {
+        # Llama Stack: gauges (point-in-time, take max during level)
+        "ls_active_reqs": 'http_server_active_requests{service_name="llama-stack"}',
+        "ls_db_used": 'db_client_connections_usage{service_name="llama-stack",state="used"}',
+        "ls_db_idle": 'db_client_connections_usage{service_name="llama-stack",state="idle"}',
+        "ls_cpu_ratio": 'process_cpu_utilization_ratio{service_name="llama-stack"}',
+        "ls_threads": 'process_thread_count{service_name="llama-stack"}',
+        "ls_fds": 'process_open_file_descriptor_count{service_name="llama-stack"}',
 
-    # GPU gauges
-    "gpu_util_pct": 'avg(DCGM_FI_DEV_GPU_UTIL)',
-    "gpu_power_w": 'avg(DCGM_FI_DEV_POWER_USAGE)',
-    "gpu_temp_c": 'avg(DCGM_FI_DEV_GPU_TEMP)',
-    "gpu_tensor_pct": 'avg(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE) * 100',
+        # vLLM gauges
+        "vllm_kv_cache_pct": 'vllm:gpu_cache_usage_perc * 100',
+        "vllm_running": 'vllm:num_requests_running',
+        "vllm_waiting": 'vllm:num_requests_waiting',
 
-    # Memory gauges (point-in-time)
-    "vllm_pod_mem_mb": 'sum(container_memory_working_set_bytes{namespace="perf-testing",pod=~"vllm.*",container!=""}) / 1048576',
-    "ls_pod_mem_mb": 'sum(container_memory_working_set_bytes{namespace="perf-testing",pod=~"llama-stack.*",container!=""}) / 1048576',
-    "pg_pod_mem_mb": 'sum(container_memory_working_set_bytes{namespace="perf-testing",pod=~"postgresql.*",container!=""}) / 1048576',
-    "otel_pod_mem_mb": 'sum(container_memory_working_set_bytes{namespace="perf-testing",pod=~"otel.*",container!=""}) / 1048576',
+        # GPU gauges
+        "gpu_util_pct": 'avg(DCGM_FI_DEV_GPU_UTIL)',
+        "gpu_power_w": 'avg(DCGM_FI_DEV_POWER_USAGE)',
+        "gpu_temp_c": 'avg(DCGM_FI_DEV_GPU_TEMP)',
+        "gpu_tensor_pct": 'avg(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE) * 100',
 
-    # Node memory gauges
-    "node_app_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_app_worker=""},"instance","$1","node","(.+)"))',
-    "node_inference_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_inference_worker=""},"instance","$1","node","(.+)"))',
-    "node_loadgen_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_loadgen_worker=""},"instance","$1","node","(.+)"))',
-}
+        # Memory gauges (point-in-time)
+        "vllm_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"vllm.*",container!=""}}) / 1048576',
+        "ls_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"llama-stack.*",container!=""}}) / 1048576',
+        "pg_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"postgresql.*",container!=""}}) / 1048576',
+        "otel_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"otel.*",container!=""}}) / 1048576',
+
+        # Node memory gauges
+        "node_app_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_app_worker=""},"instance","$1","node","(.+)"))',
+        "node_inference_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_inference_worker=""},"instance","$1","node","(.+)"))',
+        "node_loadgen_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_loadgen_worker=""},"instance","$1","node","(.+)"))',
+    }
 
 
 def collect_metrics(prom: PrometheusClient,
-                    level_start: float, level_end: float) -> ScaleMetrics:
+                    level_start: float, level_end: float,
+                    namespace: str = "perf-testing") -> ScaleMetrics:
     """Query all metrics from Prometheus scoped to the level's time window.
 
     - Rate metrics: evaluated at level_end with a rate window matching the
@@ -412,11 +420,9 @@ def collect_metrics(prom: PrometheusClient,
     m = ScaleMetrics()
 
     duration_s = max(int(level_end - level_start), 15)
-    # Prometheus rate() needs at least 2 scrape intervals; floor at 30s
     window = f"{max(duration_s, 30)}s"
 
-    # Rate metrics: instant query at level_end with the right window
-    for key, query_tpl in RATE_METRICS.items():
+    for key, query_tpl in rate_metrics(namespace).items():
         query = query_tpl.format(window=window)
         val = prom.query(query, at_time=level_end)
         if key == "_vllm_ttft_s":
@@ -426,8 +432,7 @@ def collect_metrics(prom: PrometheusClient,
         elif not key.startswith("_"):
             setattr(m, key, val)
 
-    # Gauge metrics: range query returning max during the level
-    for key, query in GAUGE_METRICS.items():
+    for key, query in gauge_metrics(namespace).items():
         val = prom.query_range_max(query, level_start, level_end)
         setattr(m, key, val)
 
@@ -943,7 +948,7 @@ def run_scaling_test(namespace: str, model: str, levels: list[int],
         info(f"  Waiting 20s for final scrape before collecting metrics...")
         time.sleep(20)
 
-        metrics = collect_metrics(prom, level_start=t0, level_end=t1)
+        metrics = collect_metrics(prom, level_start=t0, level_end=t1, namespace=namespace)
         metrics.concurrency = conc
         metrics.requests = reqs_per_level
         metrics.elapsed_s = elapsed
