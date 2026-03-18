@@ -21,34 +21,41 @@ info "Current node list:"
 oc get nodes -o wide
 echo ""
 
-# ─── Identify nodes by instance type ────────────────────────────────────
-# On IBM Cloud IPI, nodes are labeled with node.kubernetes.io/instance-type
-# matching the VPC profile name.
+# ─── Identify nodes by MachineSet membership ────────────────────────────
+# IBM Cloud IPI creates named worker pools in install-config. We match nodes
+# to their MachineSet via the machine.openshift.io/cluster-api-machineset label
+# on the Machine objects, then map Machine → Node.
 
-# App worker: bx2-4x16 with worker role (not a master)
-APP_NODE=$(oc get nodes \
-  -l "node.kubernetes.io/instance-type=${APP_WORKER_INSTANCE_TYPE},node-role.kubernetes.io/worker" \
-  --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
+node_from_machineset() {
+  local ms_pattern="$1"
+  local machine
+  machine=$(oc get machines -n openshift-machine-api -o json 2>/dev/null \
+    | jq -r ".items[] | select(.metadata.labels[\"machine.openshift.io/cluster-api-machineset\"] | test(\"${ms_pattern}\")) | .status.nodeRef.name" \
+    | head -1)
+  echo "$machine"
+}
 
-# GPU worker: identified by GPU instance type
-GPU_NODE=$(oc get nodes \
-  -l "node.kubernetes.io/instance-type=${GPU_WORKER_INSTANCE_TYPE}" \
-  --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
+INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
 
-# Load-gen worker: identified by its instance type
-LOADGEN_NODE=$(oc get nodes \
-  -l "node.kubernetes.io/instance-type=${LOADGEN_WORKER_INSTANCE_TYPE}" \
-  --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
+APP_NODE=$(node_from_machineset "${INFRA_ID}.*app-worker")
+INFERENCE_NODE=$(node_from_machineset "${INFRA_ID}.*inference-worker")
+TOOLS_NODE=$(node_from_machineset "${INFRA_ID}.*tools-worker")
+RAG_NODE=$(node_from_machineset "${INFRA_ID}.*rag-worker")
+LOADGEN_NODE=$(node_from_machineset "${INFRA_ID}.*loadgen-worker")
 
 # ─── Validate detection ──────────────────────────────────────────────────
-[[ -n "$APP_NODE" ]]     || bail "Could not find app worker node (${APP_WORKER_INSTANCE_TYPE})"
-[[ -n "$GPU_NODE" ]]     || bail "Could not find GPU worker node (${GPU_WORKER_INSTANCE_TYPE})"
-[[ -n "$LOADGEN_NODE" ]] || bail "Could not find load-gen worker node (${LOADGEN_WORKER_INSTANCE_TYPE})"
+[[ -n "$APP_NODE" ]]       || bail "Could not find app worker node"
+[[ -n "$INFERENCE_NODE" ]] || bail "Could not find inference worker node"
+[[ -n "$TOOLS_NODE" ]]    || bail "Could not find tools worker node"
+[[ -n "$RAG_NODE" ]]      || bail "Could not find RAG worker node"
+[[ -n "$LOADGEN_NODE" ]]  || bail "Could not find load-gen worker node"
 
 info "Detected nodes:"
-info "  App worker:      ${APP_NODE}"
-info "  GPU worker:      ${GPU_NODE}"
-info "  Load-gen worker: ${LOADGEN_NODE}"
+info "  App worker:       ${APP_NODE}"
+info "  Inference worker: ${INFERENCE_NODE}"
+info "  Tools worker:     ${TOOLS_NODE}"
+info "  RAG worker:       ${RAG_NODE}"
+info "  Load-gen worker:  ${LOADGEN_NODE}"
 echo ""
 
 # ─── Label app worker ──────────────────────────────────────────────────────
@@ -61,17 +68,25 @@ info "Labeling load-gen worker..."
 oc label node "${LOADGEN_NODE}" node-role.kubernetes.io/loadgen-worker="" --overwrite
 ok "Load-gen worker labeled: node-role.kubernetes.io/loadgen-worker"
 
-# ─── Label GPU worker ────────────────────────────────────────────────────
-# The GPU taint is applied in 03-install-operators.sh after the GPU Operator
-# is installed and GPUs are detected. Here we just label for identification.
-info "Labeling GPU worker..."
-oc label node "${GPU_NODE}" node-role.kubernetes.io/gpu-worker="" --overwrite
-ok "GPU worker labeled: node-role.kubernetes.io/gpu-worker"
+# ─── Label inference worker ──────────────────────────────────────────────
+info "Labeling inference worker..."
+oc label node "${INFERENCE_NODE}" node-role.kubernetes.io/inference-worker="" --overwrite
+ok "Inference worker labeled: node-role.kubernetes.io/inference-worker"
+
+# ─── Label tools worker ─────────────────────────────────────────────────
+info "Labeling tools worker..."
+oc label node "${TOOLS_NODE}" node-role.kubernetes.io/tools-worker="" --overwrite
+ok "Tools worker labeled: node-role.kubernetes.io/tools-worker"
+
+# ─── Label RAG worker ───────────────────────────────────────────────────
+info "Labeling RAG worker..."
+oc label node "${RAG_NODE}" node-role.kubernetes.io/rag-worker="" --overwrite
+ok "RAG worker labeled: node-role.kubernetes.io/rag-worker"
 
 # ─── Verify ───────────────────────────────────────────────────────────────
 echo ""
 info "Verifying labels..."
-oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/gpu-worker,node-role.kubernetes.io/loadgen-worker \
+oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/tools-worker,node-role.kubernetes.io/rag-worker,node-role.kubernetes.io/loadgen-worker \
   --no-headers | while read -r line; do
   echo "  $line"
 done

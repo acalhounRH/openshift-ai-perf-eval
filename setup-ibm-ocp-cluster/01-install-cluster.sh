@@ -64,11 +64,25 @@ compute:
         type: ${APP_WORKER_INSTANCE_TYPE}
         zones:
           - ${IBMCLOUD_ZONE}
-  - name: gpu-worker
+  - name: inference-worker
     replicas: 1
     platform:
       ibmcloud:
-        type: ${GPU_WORKER_INSTANCE_TYPE}
+        type: ${INFERENCE_WORKER_INSTANCE_TYPE}
+        zones:
+          - ${IBMCLOUD_ZONE}
+  - name: tools-worker
+    replicas: 1
+    platform:
+      ibmcloud:
+        type: ${TOOLS_WORKER_INSTANCE_TYPE}
+        zones:
+          - ${IBMCLOUD_ZONE}
+  - name: rag-worker
+    replicas: 1
+    platform:
+      ibmcloud:
+        type: ${RAG_WORKER_INSTANCE_TYPE}
         zones:
           - ${IBMCLOUD_ZONE}
   - name: loadgen-worker

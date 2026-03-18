@@ -4,7 +4,7 @@
 # ============================================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/config.env"
+source "${CONFIG_ENV:-${SCRIPT_DIR}/config.env}"
 
 echo ""
 echo "============================================"
@@ -18,6 +18,10 @@ ok "Connected to cluster as $(oc whoami)"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1. NODE FEATURE DISCOVERY
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
+  info "Simulator mode — skipping NFD and GPU Operator (no GPU required)"
+else
+
 info "Installing Node Feature Discovery (NFD) Operator..."
 
 oc apply -f - <<EOF
@@ -136,7 +140,7 @@ echo ""
 # so the GPU operator can proceed with driver installation.
 if [[ "$NFD_LABELED" == "false" ]]; then
   warn "NFD did not label the GPU node in time. Applying labels manually..."
-  GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/gpu-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
+  GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
   if [[ -n "$GPU_NODE" ]]; then
     KERNEL_VERSION=$(oc get node "$GPU_NODE" -o jsonpath='{.status.nodeInfo.kernelVersion}' 2>/dev/null)
     OS_IMAGE=$(oc get node "$GPU_NODE" -o jsonpath='{.status.nodeInfo.osImage}' 2>/dev/null)
@@ -156,13 +160,13 @@ if [[ "$NFD_LABELED" == "false" ]]; then
     fi
     ok "Manual labels applied to ${GPU_NODE}"
   else
-    warn "No gpu-worker node found to label"
+    warn "No inference-worker node found to label"
   fi
 fi
 
 # The GPU Operator needs OSTREE_VERSION label for DTK driver compilation.
 # NFD may not set this even when running, so always ensure it exists.
-GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/gpu-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
+GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
 if [[ -n "$GPU_NODE" ]]; then
   EXISTING_OSTREE=$(oc get node "$GPU_NODE" -o jsonpath='{.metadata.labels.feature\.node\.kubernetes\.io/system-os_release\.OSTREE_VERSION}' 2>/dev/null)
   if [[ -z "$EXISTING_OSTREE" ]]; then
@@ -324,6 +328,8 @@ spec:
       app: nvidia-dcgm-exporter
 EOF
 ok "DCGM exporter ServiceMonitor created"
+
+fi  # end USE_SIMULATOR check (NFD + GPU Operator)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3. OPENSHIFT SERVERLESS (KNATIVE) — required for autoscaling evaluation
