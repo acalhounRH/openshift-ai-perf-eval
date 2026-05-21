@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 02-label-nodes.sh — Label and taint worker nodes for role-based scheduling
+# 02-label-nodes.sh — Create MachineSets for inference/loadgen workers, label nodes
 # ============================================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/config.env"
 
 echo ""
 echo "============================================"
-echo "  Labeling & Tainting Worker Nodes"
+echo "  Creating Worker MachineSets & Labeling Nodes"
 echo "============================================"
 echo ""
 
@@ -16,83 +16,168 @@ echo ""
 oc whoami >/dev/null 2>&1 || bail "Cannot connect to cluster. Set KUBECONFIG=${KUBECONFIG}"
 ok "Connected to cluster as $(oc whoami)"
 
-# ─── Show current nodes ──────────────────────────────────────────────────
+# ─── Show current nodes ────────────────────────────────────────────────────
 info "Current node list:"
 oc get nodes -o wide
 echo ""
 
-# ─── Identify nodes by MachineSet membership ────────────────────────────
-# IBM Cloud IPI creates named worker pools in install-config. We match nodes
-# to their MachineSet via the machine.openshift.io/cluster-api-machineset label
-# on the Machine objects, then map Machine → Node.
+# ─── Get the infrastructure ID (used in MachineSet naming) ─────────────────
+INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
+info "Infrastructure ID: ${INFRA_ID}"
 
-node_from_machineset() {
-  local ms_pattern="$1"
-  local machine
-  machine=$(oc get machines -n openshift-machine-api -o json 2>/dev/null \
-    | jq -r ".items[] | select(.metadata.labels[\"machine.openshift.io/cluster-api-machineset\"] | test(\"${ms_pattern}\")) | .status.nodeRef.name" \
-    | head -1)
-  echo "$machine"
+# ─── Get the default worker MachineSet name ────────────────────────────────
+DEFAULT_MS=$(oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].metadata.name}')
+info "Using ${DEFAULT_MS} as template for new MachineSets"
+
+# ─── Extract providerSpec fields from the working MachineSet ───────────────
+TEMPLATE_JSON=$(oc get machineset/${DEFAULT_MS} -n openshift-machine-api -o json)
+
+IBM_IMAGE=$(echo "$TEMPLATE_JSON" | jq -r '.spec.template.spec.providerSpec.value.image')
+IBM_VPC=$(echo "$TEMPLATE_JSON" | jq -r '.spec.template.spec.providerSpec.value.vpc')
+IBM_RESOURCE_GROUP=$(echo "$TEMPLATE_JSON" | jq -r '.spec.template.spec.providerSpec.value.resourceGroup')
+IBM_REGION=$(echo "$TEMPLATE_JSON" | jq -r '.spec.template.spec.providerSpec.value.region')
+IBM_ZONE=$(echo "$TEMPLATE_JSON" | jq -r '.spec.template.spec.providerSpec.value.zone')
+IBM_SECURITY_GROUPS=$(echo "$TEMPLATE_JSON" | jq '.spec.template.spec.providerSpec.value.primaryNetworkInterface.securityGroups')
+IBM_SUBNET=$(echo "$TEMPLATE_JSON" | jq -r '.spec.template.spec.providerSpec.value.primaryNetworkInterface.subnet')
+
+info "  Image:          ${IBM_IMAGE}"
+info "  VPC:            ${IBM_VPC}"
+info "  Resource Group: ${IBM_RESOURCE_GROUP}"
+info "  Region/Zone:    ${IBM_REGION} / ${IBM_ZONE}"
+info "  Subnet:         ${IBM_SUBNET}"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 1. LABEL THE INITIAL WORKER AS APP-WORKER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+info "Labeling initial worker node as app-worker..."
+APP_NODE=$(oc get nodes \
+  -l "node-role.kubernetes.io/worker,!node-role.kubernetes.io/master" \
+  --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
+
+if [[ -n "$APP_NODE" ]]; then
+  oc label node "${APP_NODE}" node-role.kubernetes.io/app-worker="" --overwrite
+  ok "App worker labeled: ${APP_NODE}"
+else
+  warn "No worker node found yet — label manually after node is ready"
+fi
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Helper: create an IBM Cloud VPC MachineSet by cloning the working template
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+create_machineset() {
+  local ms_name="$1"
+  local instance_profile="$2"
+  local role_label="$3"
+
+  info "Creating MachineSet: ${ms_name} (${instance_profile})..."
+
+  cat <<EOF | oc apply -f -
+apiVersion: machine.openshift.io/v1beta1
+kind: MachineSet
+metadata:
+  name: ${ms_name}
+  namespace: openshift-machine-api
+  labels:
+    machine.openshift.io/cluster-api-cluster: ${INFRA_ID}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      machine.openshift.io/cluster-api-cluster: ${INFRA_ID}
+      machine.openshift.io/cluster-api-machineset: ${ms_name}
+  template:
+    metadata:
+      labels:
+        machine.openshift.io/cluster-api-cluster: ${INFRA_ID}
+        machine.openshift.io/cluster-api-machineset: ${ms_name}
+        machine.openshift.io/cluster-api-machine-role: worker
+        machine.openshift.io/cluster-api-machine-type: worker
+    spec:
+      metadata:
+        labels:
+          node-role.kubernetes.io/worker: ""
+          node-role.kubernetes.io/${role_label}: ""
+      providerSpec:
+        value:
+          apiVersion: ibmcloudproviderconfig.openshift.io/v1beta1
+          kind: IBMCloudMachineProviderSpec
+          image: ${IBM_IMAGE}
+          profile: ${instance_profile}
+          region: ${IBM_REGION}
+          zone: ${IBM_ZONE}
+          resourceGroup: ${IBM_RESOURCE_GROUP}
+          vpc: ${IBM_VPC}
+          primaryNetworkInterface:
+            securityGroups: ${IBM_SECURITY_GROUPS}
+            subnet: ${IBM_SUBNET}
+          userDataSecret:
+            name: worker-user-data
+          credentialsSecret:
+            name: ibmcloud-credentials
+EOF
+  ok "MachineSet ${ms_name} created"
 }
 
-INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2. CREATE INFERENCE WORKER MACHINESET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INFERENCE_MS_NAME="${INFRA_ID}-inference-worker-${IBMCLOUD_ZONE}"
+create_machineset "${INFERENCE_MS_NAME}" "${INFERENCE_WORKER_INSTANCE_TYPE}" "inference-worker"
 
-APP_NODE=$(node_from_machineset "${INFRA_ID}.*app-worker")
-INFERENCE_NODE=$(node_from_machineset "${INFRA_ID}.*inference-worker")
-TOOLS_NODE=$(node_from_machineset "${INFRA_ID}.*tools-worker")
-RAG_NODE=$(node_from_machineset "${INFRA_ID}.*rag-worker")
-LOADGEN_NODE=$(node_from_machineset "${INFRA_ID}.*loadgen-worker")
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 3. CREATE TOOLS WORKER MACHINESET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOOLS_MS_NAME="${INFRA_ID}-tools-worker-${IBMCLOUD_ZONE}"
+create_machineset "${TOOLS_MS_NAME}" "${TOOLS_WORKER_INSTANCE_TYPE}" "tools-worker"
 
-# ─── Validate detection ──────────────────────────────────────────────────
-[[ -n "$APP_NODE" ]]       || bail "Could not find app worker node"
-[[ -n "$INFERENCE_NODE" ]] || bail "Could not find inference worker node"
-[[ -n "$TOOLS_NODE" ]]    || bail "Could not find tools worker node"
-[[ -n "$RAG_NODE" ]]      || bail "Could not find RAG worker node"
-[[ -n "$LOADGEN_NODE" ]]  || bail "Could not find load-gen worker node"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 4. CREATE RAG WORKER MACHINESET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RAG_MS_NAME="${INFRA_ID}-rag-worker-${IBMCLOUD_ZONE}"
+create_machineset "${RAG_MS_NAME}" "${RAG_WORKER_INSTANCE_TYPE}" "rag-worker"
 
-info "Detected nodes:"
-info "  App worker:       ${APP_NODE}"
-info "  Inference worker: ${INFERENCE_NODE}"
-info "  Tools worker:     ${TOOLS_NODE}"
-info "  RAG worker:       ${RAG_NODE}"
-info "  Load-gen worker:  ${LOADGEN_NODE}"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 5. CREATE LOADGEN WORKER MACHINESET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LOADGEN_MS_NAME="${INFRA_ID}-loadgen-worker-${IBMCLOUD_ZONE}"
+create_machineset "${LOADGEN_MS_NAME}" "${LOADGEN_WORKER_INSTANCE_TYPE}" "loadgen-worker"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 6. WAIT FOR NEW NODES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+info "Waiting for new worker nodes to provision (5-10 minutes)..."
 echo ""
 
-# ─── Label app worker ──────────────────────────────────────────────────────
-info "Labeling app worker..."
-oc label node "${APP_NODE}" node-role.kubernetes.io/app-worker="" --overwrite
-ok "App worker labeled: node-role.kubernetes.io/app-worker"
+for i in $(seq 1 60); do
+  INFERENCE_READY=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  TOOLS_READY=$(oc get nodes -l node-role.kubernetes.io/tools-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  RAG_READY=$(oc get nodes -l node-role.kubernetes.io/rag-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  LOADGEN_READY=$(oc get nodes -l node-role.kubernetes.io/loadgen-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
 
-# ─── Label load-gen worker ────────────────────────────────────────────────
-info "Labeling load-gen worker..."
-oc label node "${LOADGEN_NODE}" node-role.kubernetes.io/loadgen-worker="" --overwrite
-ok "Load-gen worker labeled: node-role.kubernetes.io/loadgen-worker"
+  if [[ "$INFERENCE_READY" -ge 1 && "$TOOLS_READY" -ge 1 && "$RAG_READY" -ge 1 && "$LOADGEN_READY" -ge 1 ]]; then
+    echo ""
+    ok "All worker nodes are ready"
+    break
+  fi
 
-# ─── Label inference worker ──────────────────────────────────────────────
-info "Labeling inference worker..."
-oc label node "${INFERENCE_NODE}" node-role.kubernetes.io/inference-worker="" --overwrite
-ok "Inference worker labeled: node-role.kubernetes.io/inference-worker"
-
-# ─── Label tools worker ─────────────────────────────────────────────────
-info "Labeling tools worker..."
-oc label node "${TOOLS_NODE}" node-role.kubernetes.io/tools-worker="" --overwrite
-ok "Tools worker labeled: node-role.kubernetes.io/tools-worker"
-
-# ─── Label RAG worker ───────────────────────────────────────────────────
-info "Labeling RAG worker..."
-oc label node "${RAG_NODE}" node-role.kubernetes.io/rag-worker="" --overwrite
-ok "RAG worker labeled: node-role.kubernetes.io/rag-worker"
-
-# ─── Verify ───────────────────────────────────────────────────────────────
-echo ""
-info "Verifying labels..."
-oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/tools-worker,node-role.kubernetes.io/rag-worker,node-role.kubernetes.io/loadgen-worker \
-  --no-headers | while read -r line; do
-  echo "  $line"
+  echo -n "."
+  sleep 10
 done
 
+# ─── Verify ─────────────────────────────────────────────────────────────────
 echo ""
-ok "Node labeling complete."
+info "Final node list:"
+oc get nodes -o wide
+echo ""
+
+info "MachineSets:"
+oc get machinesets -n openshift-machine-api
+echo ""
+
+info "Node roles:"
+oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/tools-worker,node-role.kubernetes.io/rag-worker,node-role.kubernetes.io/loadgen-worker
+echo ""
+
+ok "Node setup complete."
 echo ""
 info "Next step: ./03-install-operators.sh"
-

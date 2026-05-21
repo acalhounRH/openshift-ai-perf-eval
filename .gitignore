@@ -25,3 +25,9 @@ pull-secret*.json
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Benchmark results
+results/
+
+# Documentation (internal)
+docs/

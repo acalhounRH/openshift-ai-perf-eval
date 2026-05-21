@@ -16,7 +16,7 @@ echo ""
 oc whoami >/dev/null 2>&1 || bail "Cannot connect to cluster. Set KUBECONFIG=${KUBECONFIG}"
 
 # Find MachineSet names
-GPU_MS=$(oc get machineset -n openshift-machine-api --no-headers -o custom-columns=':metadata.name' | grep -i gpu || echo "")
+GPU_MS=$(oc get machineset -n openshift-machine-api --no-headers -o custom-columns=':metadata.name' | grep -i inference || echo "")
 LOADGEN_MS=$(oc get machineset -n openshift-machine-api --no-headers -o custom-columns=':metadata.name' | grep -i loadgen || echo "")
 
 [[ -n "$GPU_MS" ]]     || bail "Could not find GPU MachineSet."

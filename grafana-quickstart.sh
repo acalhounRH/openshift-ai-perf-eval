@@ -36,7 +36,7 @@ fi
 GRAFANA_NS="${PERF_NAMESPACE}"
 GRAFANA_SA="grafana"
 
-ALL_DASHBOARD_CMS="grafana-datasources grafana-dashboards grafana-dashboard-ocp grafana-dashboard-gpu grafana-dashboard-llm grafana-dashboard-perf-eval grafana-dashboard-llamastack grafana-dashboard-responses-api grafana-dashboard-traces grafana-dashboard-perf-eng grafana-dashboard-instance-resources"
+ALL_DASHBOARD_CMS="grafana-datasources grafana-dashboards grafana-dashboard-ocp grafana-dashboard-gpu grafana-dashboard-llm grafana-dashboard-perf-eval grafana-dashboard-llamastack grafana-dashboard-responses-api grafana-dashboard-traces grafana-dashboard-perf-eng grafana-dashboard-instance-resources grafana-dashboard-ai-gateway"
 
 # ─── Teardown mode ─────────────────────────────────────────────────────────
 if [[ "${1:-}" == "teardown" ]]; then
@@ -169,6 +169,56 @@ EOF
   fi
 else
   ok "DCGM exporter ServiceMonitor already exists"
+fi
+
+# Payload Processing ServiceMonitor — scrapes BBR plugin metrics
+if ! oc get servicemonitor payload-processing-metrics -n openshift-ingress >/dev/null 2>&1; then
+  info "Creating Payload Processing ServiceMonitor..."
+  oc apply -f - <<'EOF'
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: payload-processing-metrics
+  namespace: openshift-ingress
+  labels:
+    app: payload-processing
+spec:
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 15s
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payload-processing
+EOF
+  ok "Payload Processing ServiceMonitor created"
+else
+  ok "Payload Processing ServiceMonitor already exists"
+fi
+
+# MaaS Gateway PodMonitor — scrapes Envoy/Istio metrics from the gateway proxy
+if ! oc get podmonitor maas-gateway-envoy-metrics -n openshift-ingress >/dev/null 2>&1; then
+  info "Creating MaaS Gateway Envoy PodMonitor..."
+  oc apply -f - <<'EOF'
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: maas-gateway-envoy-metrics
+  namespace: openshift-ingress
+  labels:
+    app: maas-gateway
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
+  podMetricsEndpoints:
+  - port: metrics
+    path: /stats/prometheus
+    interval: 15s
+EOF
+  ok "MaaS Gateway Envoy PodMonitor created"
+else
+  ok "MaaS Gateway Envoy PodMonitor already exists"
 fi
 
 ok "Prerequisites verified"
@@ -682,22 +732,68 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — GenAI Token Usage (OTel)",
+          "title": "vLLM — Prefill vs Decode Time",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             {
-              "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\"}[5m]))",
-              "legendFormat": "tokens/s"
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket[5m])) by (le))",
+              "legendFormat": "prefill p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prefill_time_seconds_bucket[5m])) by (le))",
+              "legendFormat": "prefill p95"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_decode_time_seconds_bucket[5m])) by (le))",
+              "legendFormat": "decode p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_decode_time_seconds_bucket[5m])) by (le))",
+              "legendFormat": "decode p95"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Active Requests & DB Connections",
+          "title": "vLLM — Queue Wait Time & Prefix Cache Hit Rate",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_queue_time_seconds_bucket[5m])) by (le))",
+              "legendFormat": "queue wait p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_queue_time_seconds_bucket[5m])) by (le))",
+              "legendFormat": "queue wait p95"
+            },
+            {
+              "expr": "vllm:gpu_prefix_cache_hit_rate * 100",
+              "legendFormat": "prefix cache hit %"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [{ "matcher": { "id": "byName", "options": "prefix cache hit %" }, "properties": [{ "id": "unit", "value": "percent" }] }] }
+        },
+        {
+          "title": "Llama Stack — HTTP Request Rate by Endpoint",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target!=\"\"}[5m])) by (http_target)",
+              "legendFormat": "{{http_target}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+        },
+        {
+          "title": "Llama Stack — Active Requests & Error Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             {
@@ -705,8 +801,8 @@ data:
               "legendFormat": "active HTTP requests"
             },
             {
-              "expr": "db_client_connections_usage{service_name=\"llama-stack\"}",
-              "legendFormat": "DB connections ({{state}})"
+              "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_status_code!~\"2..\"}[5m]))",
+              "legendFormat": "errors/s (non-2xx)"
             }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
@@ -714,7 +810,7 @@ data:
         {
           "title": "Pod CPU (perf-testing)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             {
@@ -727,7 +823,7 @@ data:
         {
           "title": "Pod Memory (perf-testing)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             {
@@ -867,13 +963,14 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — GenAI Latency & Tokens (OTel)",
+          "title": "Llama Stack — Token Throughput & Request Rate",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 15 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "GenAI op p50" },
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\"}[5m]))", "legendFormat": "token usage rate" }
+            { "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "output tok/s" },
+            { "expr": "sum(rate(vllm:prompt_tokens_total[1m]))", "legendFormat": "input tok/s" },
+            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "LS requests/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
@@ -1035,63 +1132,63 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — GenAI Chat Latency (p50 / p95 / p99)",
-          "description": "End-to-end latency of Llama Stack chat completions (client-side, includes vLLM round-trip)",
+          "title": "Llama Stack — HTTP Server Latency (p50 / p95 / p99)",
+          "description": "End-to-end HTTP latency of Llama Stack API endpoints (includes vLLM inference round-trip)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "p95" },
-            { "expr": "histogram_quantile(0.99, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "p99" }
+            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p99" }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Token Throughput (input vs output)",
-          "description": "Rate of tokens processed, split by input (prompt) and output (completion)",
+          "title": "Llama Stack — Token Throughput (vLLM engine)",
+          "description": "Rate of tokens processed at the vLLM engine level — prompt (input) and generation (output)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"input\"}[5m]))", "legendFormat": "input tokens/s" },
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "output tokens/s" }
+            { "expr": "sum(rate(vllm:prompt_tokens_total[1m]))", "legendFormat": "input (prompt) tok/s" },
+            { "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "output (generation) tok/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
           "title": "Llama Stack — Avg Tokens per Request",
-          "description": "Average number of input and output tokens per chat completion request",
+          "description": "Average prompt and generation tokens per vLLM request — computed from vLLM token counters and request success rate",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"input\"}[5m])) / sum(rate(gen_ai_client_token_usage_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"input\"}[5m]))", "legendFormat": "avg input tokens" },
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"output\"}[5m])) / sum(rate(gen_ai_client_token_usage_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "avg output tokens" }
+            { "expr": "sum(rate(vllm:prompt_tokens_total[5m])) / sum(rate(vllm:request_success_total[5m]))", "legendFormat": "avg input tokens" },
+            { "expr": "sum(rate(vllm:generation_tokens_total[5m])) / sum(rate(vllm:request_success_total[5m]))", "legendFormat": "avg output tokens" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Chat Completion Request Rate",
-          "description": "Successful and failed chat completion requests per second",
+          "title": "Llama Stack — API Request Rate",
+          "description": "HTTP request rate by endpoint — chat completions, responses, health",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_operation_duration_seconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m]))", "legendFormat": "chat requests/s" }
+            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — GenAI Avg Latency",
-          "description": "Average chat completion latency (simpler view for trending)",
+          "title": "Llama Stack — Avg API Latency",
+          "description": "Average HTTP server latency across inference endpoints (simpler view for trending)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_operation_duration_seconds_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) / sum(rate(gen_ai_client_operation_duration_seconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m]))", "legendFormat": "avg latency" }
+            { "expr": "sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "avg latency" }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
           "title": "── HTTP API SERVER ──────────────────────",
@@ -1146,14 +1243,14 @@ data:
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Upstream vLLM Latency (p50 / p95)",
-          "description": "Llama Stack → vLLM HTTP client latency (outbound calls to inference backend)",
+          "title": "vLLM — Engine Latency (p50 / p95)",
+          "description": "vLLM inference engine end-to-end latency — measures the raw model serving time",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_method=\"POST\"}[5m])) by (le))", "legendFormat": "vLLM call p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_method=\"POST\"}[5m])) by (le))", "legendFormat": "vLLM call p95" }
+            { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p95" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
@@ -1164,28 +1261,27 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — PostgreSQL Connection Pool",
-          "description": "Active and idle connections in the Llama Stack asyncpg connection pool",
+          "title": "PostgreSQL — Container CPU & Memory",
+          "description": "Container-level resource usage for PostgreSQL pods in the perf-testing namespace",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 35 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"used\"}", "legendFormat": "active (used)" },
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"idle\"}", "legendFormat": "idle" }
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"postgresql.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU (cores)" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"postgresql.*\",container!=\"\"}) by (pod) / 1024 / 1024", "legendFormat": "{{pod}} mem (MiB)" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — PostgreSQL Connection Pool (stacked)",
-          "description": "Total pool size as stacked area — used + idle",
+          "title": "PostgreSQL — Async DB Coroutine Rate",
+          "description": "Rate of key database-touching async operations from Llama Stack — store_chat_completion, try_connect, close",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 35 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"used\"}", "legendFormat": "used" },
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"idle\"}", "legendFormat": "idle" }
+            { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",name=~\"store_chat.*|try_connect|close\"}[5m])) by (name)", "legendFormat": "{{name}}/s" }
           ],
-          "fieldConfig": { "defaults": { "unit": "short", "custom": { "stacking": { "mode": "normal" }, "fillOpacity": 20 } }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
         },
         {
           "title": "── PROCESS HEALTH ───────────────────────",
@@ -1194,59 +1290,60 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — CPU Utilization",
-          "description": "Llama Stack Python process CPU usage ratio",
+          "title": "Llama Stack — Container CPU Usage",
+          "description": "CPU cores consumed by Llama Stack containers — sustained high usage indicates the API layer is CPU-bound",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 0, "y": 43 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "process_cpu_utilization_ratio{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "CPU ratio" }
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}}" }
           ],
-          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Memory Usage",
-          "description": "RSS and virtual memory of the Llama Stack process",
+          "title": "Llama Stack — Container Memory",
+          "description": "Working set memory of Llama Stack containers — watch for growth over time (memory leaks)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 8, "y": 43 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "process_memory_usage_bytes{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "RSS" },
-            { "expr": "process_memory_virtual_bytes{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "virtual" }
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}) by (pod)", "legendFormat": "{{pod}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Threads & File Descriptors",
-          "description": "Llama Stack process thread count and open file descriptors",
+          "title": "Llama Stack — Container Restarts & Throttling",
+          "description": "Container restart count and CFS throttling — sustained throttling indicates CPU limits too low",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 43 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "process_thread_count{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "threads" },
-            { "expr": "process_open_file_descriptor_count{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "open FDs" }
+            { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\"}) by (pod)", "legendFormat": "{{pod}} restarts" },
+            { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — CPU Time (user + system)",
-          "description": "Cumulative CPU time consumed by the Llama Stack process",
+          "title": "Llama Stack — OTel Spans Created",
+          "description": "Rate of OTel spans started — indicates the tracing activity level of the Llama Stack process",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 50 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "rate(process_cpu_time_seconds_total{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])", "legendFormat": "CPU time rate" }
+            { "expr": "sum(rate(otel_sdk_span_started_total{service_name=\"llama-stack\"}[5m]))", "legendFormat": "spans started/s" },
+            { "expr": "otel_sdk_span_live{service_name=\"llama-stack\"}", "legendFormat": "live spans" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Context Switches",
-          "description": "Voluntary and involuntary context switches per second",
+          "title": "vLLM — Container CPU & Memory",
+          "description": "vLLM inference server container resource usage — CPU should be low; memory includes model weights",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 50 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "rate(process_context_switches_total{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])", "legendFormat": "ctx switches/s" }
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"vllm.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU (cores)" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"vllm.*\",container!=\"\"}) by (pod) / 1024 / 1024 / 1024", "legendFormat": "{{pod}} mem (GiB)" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
@@ -1268,16 +1365,16 @@ data:
           "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — GC Collections & Objects",
-          "description": "Python garbage collector activity — collections per second and collected objects",
+          "title": "Llama Stack — Asyncio Coroutine Duration (p50 / p95)",
+          "description": "Latency of key async operations — store_chat_completion, inference calls, DB connections",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 58 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(cpython_gc_collections_total{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m]))", "legendFormat": "GC collections/s" },
-            { "expr": "sum(rate(cpython_gc_collected_objects_total{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m]))", "legendFormat": "objects collected/s" }
+            { "expr": "histogram_quantile(0.50, sum(rate(asyncio_process_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le, name))", "legendFormat": "{{name}} p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(asyncio_process_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le, name))", "legendFormat": "{{name}} p95" }
           ],
-          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
         }
       ],
       "schemaVersion": 39,
@@ -1322,27 +1419,27 @@ data:
         },
         {
           "title": "Llama Stack — End-to-End Response Latency (p50 / p95 / p99)",
-          "description": "Total time from Responses API request to complete response — includes Llama Stack processing, vLLM inference, DB writes, and tool orchestration",
+          "description": "Total time from Responses API request to complete response — HTTP server-side latency including vLLM inference, DB writes, and tool orchestration",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "p95" },
-            { "expr": "histogram_quantile(0.99, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "p99" }
+            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p99" }
           ],
-          "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] }
         },
         {
           "title": "Llama Stack — Latency Breakdown vs vLLM Inference",
-          "description": "Decomposes total API latency into vLLM inference time and Llama Stack processing overhead (routing, DB writes, formatting). Overhead = total − vLLM.",
+          "description": "Decomposes total API latency into vLLM inference time and Llama Stack processing overhead. Overhead = total HTTP server − vLLM e2e.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_target=\"/v1/chat/completions\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_target=\"/v1/chat/completions\"}[5m]))", "legendFormat": "total API avg (ms)" },
-            { "expr": "sum(rate(http_client_duration_milliseconds_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_method=\"POST\"}[5m])) / sum(rate(http_client_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_method=\"POST\"}[5m]))", "legendFormat": "vLLM call avg (ms)" },
-            { "expr": "(sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_target=\"/v1/chat/completions\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_target=\"/v1/chat/completions\"}[5m]))) - (sum(rate(http_client_duration_milliseconds_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_method=\"POST\"}[5m])) / sum(rate(http_client_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_method=\"POST\"}[5m])))", "legendFormat": "LS overhead (ms)" }
+            { "expr": "sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "total API avg (ms)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p50 (ms)" },
+            { "expr": "(sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))) - (histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000)", "legendFormat": "LS overhead (ms)" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [{ "matcher": { "id": "byName", "options": "LS overhead (ms)" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash" } }, { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }] }
         },
@@ -1397,32 +1494,31 @@ data:
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_operation_duration_seconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m]))", "legendFormat": "requests/s" }
+            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "requests/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Token Throughput (input vs output)",
-          "description": "Token processing rate — input (prompt) and output (completion) tokens per second",
+          "title": "Llama Stack — Token Throughput (vLLM engine)",
+          "description": "Token processing rate at vLLM engine level — prompt (input) and generation (output) tokens per second",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"input\"}[5m]))", "legendFormat": "input tok/s" },
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "output tok/s" },
-            { "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "vLLM gen tok/s (native)" }
+            { "expr": "sum(rate(vllm:prompt_tokens_total[1m]))", "legendFormat": "input (prompt) tok/s" },
+            { "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "output (gen) tok/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
           "title": "Llama Stack — Avg Tokens per Request",
-          "description": "Average input and output token counts per request — characterizes workload profile",
+          "description": "Average prompt and generation tokens per request — computed from vLLM token counters and request success rate",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"input\"}[5m])) / sum(rate(gen_ai_client_token_usage_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"input\"}[5m]))", "legendFormat": "avg input tokens" },
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"output\"}[5m])) / sum(rate(gen_ai_client_token_usage_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "avg output tokens" }
+            { "expr": "sum(rate(vllm:prompt_tokens_total[5m])) / sum(rate(vllm:request_success_total[5m]))", "legendFormat": "avg input tokens" },
+            { "expr": "sum(rate(vllm:generation_tokens_total[5m])) / sum(rate(vllm:request_success_total[5m]))", "legendFormat": "avg output tokens" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
@@ -1591,28 +1687,27 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — Connection Pool: Active vs Idle",
-          "description": "Llama Stack asyncpg pool — if 'used' stays high or equals pool max, DB is a bottleneck. Responses API stores conversation state and tool results here.",
+          "title": "PostgreSQL — Container Resources",
+          "description": "PostgreSQL pod CPU and memory usage — high CPU or memory pressure indicates DB bottleneck",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"used\"}", "legendFormat": "active (used)" },
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"idle\"}", "legendFormat": "idle" },
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"used\"} + db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"idle\"}", "legendFormat": "pool total" }
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"postgresql.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU (cores)" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"postgresql.*\",container!=\"\"}) by (pod) / 1024 / 1024", "legendFormat": "{{pod}} mem (MiB)" }
           ],
-          "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15 } }, "overrides": [{ "matcher": { "id": "byName", "options": "pool total" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash" } }, { "id": "color", "value": { "fixedColor": "white", "mode": "fixed" } }] }] }
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15 } }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Connection Pool Utilization (%)",
-          "description": "Percentage of pool capacity in use — sustained >80% indicates pool saturation risk and potential tail latency",
-          "type": "gauge",
+          "title": "PostgreSQL — Pod Restarts",
+          "description": "PostgreSQL container restart count — any restarts indicate stability issues",
+          "type": "stat",
           "gridPos": { "h": 8, "w": 6, "x": 12, "y": 68 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"used\"} / (db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"used\"} + db_client_connections_usage{service_name=\"llama-stack\",service=\"otel-collector-collector\",state=\"idle\"}) * 100", "legendFormat": "pool utilization" }
+            { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"postgresql.*\"})", "legendFormat": "restarts" }
           ],
-          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":60},{"color":"orange","value":80},{"color":"red","value":95}] } }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":1},{"color":"red","value":3}] } }, "overrides": [] }
         },
         {
           "title": "Llama Stack — Async DB Coroutine Rate",
@@ -1633,38 +1728,36 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — Process CPU",
-          "description": "CPU utilization of the Llama Stack Python process — should stay low; sustained >50% indicates the API layer is CPU-bound",
+          "title": "Llama Stack — Container CPU",
+          "description": "CPU cores consumed by Llama Stack containers — should stay low; sustained high usage indicates API layer is CPU-bound",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 0, "y": 77 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "process_cpu_utilization_ratio{service_name=\"llama-stack\",service=\"otel-collector-collector\"} * 100", "legendFormat": "LS CPU %" }
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}} (cores)" }
           ],
-          "fieldConfig": { "defaults": { "unit": "percent", "min": 0 }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Process Memory",
-          "description": "RSS and virtual memory — watch for growth over time (memory leaks under sustained load)",
+          "title": "Llama Stack — Container Memory",
+          "description": "Working set memory — watch for growth over time (memory leaks under sustained load)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 8, "y": 77 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "process_memory_usage_bytes{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "RSS" },
-            { "expr": "process_memory_virtual_bytes{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "virtual" }
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}) by (pod)", "legendFormat": "{{pod}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Threads, FDs & Context Switches",
-          "description": "Process-level resource consumption — thread explosion or FD exhaustion causes hard failures",
+          "title": "Llama Stack — Container Restarts & CPU Throttling",
+          "description": "Container restarts and CFS throttle percentage — sustained throttling means CPU limits are too low",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 77 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "process_thread_count{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "threads" },
-            { "expr": "process_open_file_descriptor_count{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "open FDs" },
-            { "expr": "rate(process_context_switches_total{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])", "legendFormat": "ctx switches/s" }
+            { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\"}) by (pod)", "legendFormat": "{{pod}} restarts" },
+            { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
@@ -1730,42 +1823,43 @@ data:
           "options": { "mode": "markdown", "content": "Search and explore distributed traces from **Llama Stack** and **vLLM**. Traces are collected via the **OTel Collector** and exposed as Prometheus metrics." }
         },
         {
-          "title": "Trace Count by Service (rate)",
+          "title": "OTel Span Rate by Service",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 2 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(rate(traces_spanmetrics_calls_total{service=\"otel-collector-collector\"}[5m])) by (service_name)", "legendFormat": "{{service_name}}" }
+            { "expr": "sum(rate(otel_sdk_span_started_total[5m])) by (service_name)", "legendFormat": "{{service_name}}" },
+            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name!=\"\"}[5m])) by (service_name)", "legendFormat": "{{service_name}} req/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "ops" } }
         },
         {
-          "title": "Span Duration p50 / p95 / p99 (Llama Stack)",
+          "title": "Llama Stack vs vLLM Latency (p50 / p95)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 2 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "GenAI op p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "GenAI op p95" },
-            { "expr": "histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le)) / 1000", "legendFormat": "vLLM call p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le)) / 1000", "legendFormat": "vLLM call p95" }
+            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "LS HTTP server p50 (ms)" },
+            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "LS HTTP server p95 (ms)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p50 (ms)" },
+            { "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p95 (ms)" }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
+          "fieldConfig": { "defaults": { "unit": "ms" } }
         },
         {
           "title": "── HOW TO EXPLORE TRACES ─────────────────────",
           "type": "text",
           "gridPos": { "h": 6, "w": 24, "x": 0, "y": 10 },
-          "options": { "mode": "markdown", "content": "### Trace Metrics in Grafana\\n\\nTraces are collected by the **OTel Collector** and exported as Prometheus metrics.\\n\\n**Key Prometheus trace metrics:**\\n- `gen_ai_client_operation_duration` — GenAI operation latency\\n- `gen_ai_client_token_usage` — Token throughput (input/output)\\n- `http_server_duration_milliseconds` — HTTP request latency\\n\\n**Tips:**\\n- Use the Llama Stack Deep Dive dashboard for per-operation trace-derived metrics\\n- Filter by `service_name=\\\"llama-stack\\\"` or `service_name=\\\"vllm-inference\\\"`\\n- Compare `gen_ai_client_operation_duration` vs `vllm:e2e_request_latency` to measure orchestration overhead" }
+          "options": { "mode": "markdown", "content": "### Trace Metrics in Grafana\\n\\nTraces are collected by the **OTel Collector** and exported as Prometheus metrics.\\n\\n**Key Prometheus trace metrics:**\\n- `http_server_duration_milliseconds` — HTTP server request latency\\n- `vllm:e2e_request_latency_seconds` — vLLM inference latency\\n- `otel_sdk_span_started_total` — OTel span creation rate\\n- `asyncio_process_created_total` — Async operation rates\\n\\n**Tips:**\\n- Use the Llama Stack Deep Dive dashboard for per-operation trace-derived metrics\\n- Filter by `service_name=\\\"llama-stack\\\"` for Llama Stack metrics\\n- Compare `http_server_duration_milliseconds` vs `vllm:e2e_request_latency` to measure orchestration overhead" }
         },
         {
-          "title": "Llama Stack HTTP Latency vs vLLM Call Latency (overhead)",
+          "title": "Llama Stack HTTP Latency vs vLLM Engine Latency (overhead)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=\"/v1/chat/completions\"}[5m])) by (le))", "legendFormat": "LS HTTP server p50 (ms)" },
-            { "expr": "histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "LS→vLLM HTTP client p50 (ms)" }
+            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "LS HTTP server p50 (ms)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p50 (ms)" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
         },
@@ -1780,25 +1874,25 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" } }
         },
         {
-          "title": "Token Throughput (from traces)",
+          "title": "Token Throughput (vLLM engine)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",gen_ai_token_type=\"input\"}[5m]))", "legendFormat": "input tokens/s" },
-            { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "output tokens/s" }
+            { "expr": "sum(rate(vllm:prompt_tokens_total[1m]))", "legendFormat": "input (prompt) tok/s" },
+            { "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "output (gen) tok/s" }
           ],
-          "fieldConfig": { "defaults": { "unit": "ops" } }
+          "fieldConfig": { "defaults": { "unit": "short" } }
         },
         {
-          "title": "Async Operations (DB writes, connections)",
+          "title": "Async Operations & OTel Spans",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
           "datasource": { "uid": "prometheus" },
           "targets": [
             { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",name=\"store_chat_completion\"}[5m]))", "legendFormat": "store_chat_completion/s" },
             { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",name=\"try_connect\"}[5m]))", "legendFormat": "DB try_connect/s" },
-            { "expr": "db_client_connections_usage{service_name=\"llama-stack\",state=\"used\"}", "legendFormat": "DB connections used" }
+            { "expr": "otel_sdk_span_live{service_name=\"llama-stack\"}", "legendFormat": "live spans" }
           ]
         }
       ],
@@ -1843,8 +1937,8 @@ data:
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
           "datasource": { "uid": "prometheus" },
-          "targets": [{ "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "" }],
-          "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":2},{"color":"red","value":5}] } } }
+          "targets": [{ "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "" }],
+          "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":2000},{"color":"red","value":5000}] } } }
         },
         {
           "title": "Error Rate",
@@ -1867,7 +1961,7 @@ data:
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
           "datasource": { "uid": "prometheus" },
-          "targets": [{ "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "" }],
+          "targets": [{ "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "" }],
           "fieldConfig": { "defaults": { "unit": "short", "displayName": "output tok/s", "thresholds": { "steps": [{"color":"blue","value":null}] } } }
         },
         {
@@ -1902,9 +1996,9 @@ data:
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=\"/v1/chat/completions\"}[5m])) by (le))", "legendFormat": "total (HTTP server p50)" },
-            { "expr": "histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "inference (HTTP client p50)" },
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=\"/v1/chat/completions\"}[5m])) by (le)) - histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "overhead (LS processing)" }
+            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "total (HTTP server p50)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "inference (vLLM e2e p50)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) - histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "overhead (LS processing)" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
         },
@@ -2005,8 +2099,8 @@ data:
               "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",gen_ai_token_type=\"input\"}[5m]))", "legendFormat": "input tok/s" },
-                { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "output tok/s" }
+                { "expr": "sum(rate(vllm:prompt_tokens_total[1m]))", "legendFormat": "input (prompt) tok/s" },
+                { "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "output (gen) tok/s" }
               ],
               "fieldConfig": { "defaults": { "unit": "short" } }
             },
@@ -2016,21 +2110,21 @@ data:
               "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",gen_ai_token_type=\"input\"}[5m])) / sum(rate(gen_ai_client_token_usage_count{service_name=\"llama-stack\",gen_ai_token_type=\"input\"}[5m]))", "legendFormat": "avg input" },
-                { "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=\"llama-stack\",gen_ai_token_type=\"output\"}[5m])) / sum(rate(gen_ai_client_token_usage_count{service_name=\"llama-stack\",gen_ai_token_type=\"output\"}[5m]))", "legendFormat": "avg output" }
+                { "expr": "sum(rate(vllm:prompt_tokens_total[5m])) / sum(rate(vllm:request_success_total[5m]))", "legendFormat": "avg input" },
+                { "expr": "sum(rate(vllm:generation_tokens_total[5m])) / sum(rate(vllm:request_success_total[5m]))", "legendFormat": "avg output" }
               ]
             },
             {
-              "title": "GenAI Operation Duration",
+              "title": "Llama Stack API Latency (p50/p95/p99)",
               "type": "timeseries",
               "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "p50" },
-                { "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "p95" },
-                { "expr": "histogram_quantile(0.99, sum(rate(gen_ai_client_operation_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "p99" }
+                { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p50" },
+                { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p95" },
+                { "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p99" }
               ],
-              "fieldConfig": { "defaults": { "unit": "s" } }
+              "fieldConfig": { "defaults": { "unit": "ms" } }
             }
           ]
         },
@@ -2086,13 +2180,13 @@ data:
           "collapsed": true,
           "panels": [
             {
-              "title": "PostgreSQL Connection Pool",
+              "title": "PostgreSQL Container Resources",
               "type": "timeseries",
               "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "db_client_connections_usage{service_name=\"llama-stack\",state=\"used\"}", "legendFormat": "active (used)" },
-                { "expr": "db_client_connections_usage{service_name=\"llama-stack\",state=\"idle\"}", "legendFormat": "idle" }
+                { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"postgresql.*\",container!=\"\"}[5m]))", "legendFormat": "CPU (cores)" },
+                { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"postgresql.*\",container!=\"\"}) / 1024 / 1024", "legendFormat": "mem (MiB)" }
               ]
             },
             {
@@ -2120,13 +2214,13 @@ data:
           "collapsed": true,
           "panels": [
             {
-              "title": "Inter-Service Latency (LS → vLLM)",
+              "title": "vLLM Engine Latency (inference time)",
               "type": "timeseries",
               "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "p50" },
-                { "expr": "histogram_quantile(0.95, sum(rate(http_client_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "p95" }
+                { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "p50" },
+                { "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "p95" }
               ],
               "fieldConfig": { "defaults": { "unit": "ms" } }
             },
@@ -2235,14 +2329,14 @@ data:
               "fieldConfig": { "defaults": { "unit": "bytes" } }
             },
             {
-              "title": "Llama Stack Process Health",
+              "title": "Llama Stack Container Health",
               "type": "timeseries",
               "gridPos": { "h": 8, "w": 8, "x": 16, "y": 21 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "process_cpu_utilization_ratio{service_name=\"llama-stack\"}", "legendFormat": "CPU ratio" },
-                { "expr": "process_thread_count{service_name=\"llama-stack\"}", "legendFormat": "threads" },
-                { "expr": "process_open_file_descriptor_count{service_name=\"llama-stack\"}", "legendFormat": "open FDs" }
+                { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m]))", "legendFormat": "CPU (cores)" },
+                { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\"})", "legendFormat": "restarts" },
+                { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
               ]
             },
             {
@@ -2273,17 +2367,17 @@ data:
               "title": "Trace Exploration Guide",
               "type": "text",
               "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
-              "options": { "mode": "markdown", "content": "### Distributed Traces (OTel → Prometheus)\\n\\nTrace-derived metrics are available via Prometheus:\\n\\n| Metric | What It Shows |\\n|---|---|\\n| `gen_ai_client_operation_duration` | GenAI operation latency |\\n| `http_server_duration_milliseconds` | HTTP request latency |\\n| `gen_ai_client_token_usage` | Token throughput |\\n| `asyncio_process_created_total` | Async operation rates |\\n\\nLlama Stack overhead = total HTTP time − vLLM call time" }
+              "options": { "mode": "markdown", "content": "### Distributed Traces (OTel → Prometheus)\\n\\nTrace-derived metrics are available via Prometheus:\\n\\n| Metric | What It Shows |\\n|---|---|\\n| `http_server_duration_milliseconds` | HTTP request latency |\\n| `vllm:e2e_request_latency_seconds` | vLLM inference latency |\\n| `otel_sdk_span_started_total` | OTel span creation rate |\\n| `asyncio_process_created_total` | Async operation rates |\\n\\nLlama Stack overhead = LS HTTP server time − vLLM e2e time" }
             },
             {
-              "title": "Context Switches & GC",
+              "title": "Asyncio Operations & OTel Spans",
               "type": "timeseries",
               "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "rate(process_context_switches_total{service_name=\"llama-stack\"}[5m])", "legendFormat": "ctx switches/s" },
-                { "expr": "sum(rate(cpython_gc_collections_total{service_name=\"llama-stack\"}[5m]))", "legendFormat": "GC collections/s" },
-                { "expr": "sum(rate(cpython_gc_collected_objects_total{service_name=\"llama-stack\"}[5m]))", "legendFormat": "GC objects/s" }
+                { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\"}[5m])) by (name)", "legendFormat": "{{name}}" },
+                { "expr": "sum(rate(otel_sdk_span_started_total{service_name=\"llama-stack\"}[5m]))", "legendFormat": "OTel spans/s" },
+                { "expr": "otel_sdk_span_live{service_name=\"llama-stack\"}", "legendFormat": "live spans" }
               ]
             }
           ]
@@ -2541,6 +2635,457 @@ CONFIGMAP_EOF
 ok "Per-Process Instance Resource Utilization dashboard created"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AI GATEWAY DASHBOARD — Kuadrant/Authorino/Limitador resource monitoring
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+info "Creating AI Gateway dashboard..."
+
+apply_cm <<'CONFIGMAP_EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-ai-gateway
+  namespace: GRAFANA_NS_PLACEHOLDER
+data:
+  ai-gateway.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [],
+      "panels": [
+        {
+          "title": "Full Pipeline Latency View (Gateway → Kuadrant → BBR → Backend)",
+          "type": "row",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false
+        },
+        {
+          "title": "E2E Latency (p50/p95/p99)",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 8, "x": 0, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])))", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])))", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])))", "legendFormat": "p99" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 100}, {"color": "red", "value": 500}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" }
+        },
+        {
+          "title": "Request Rate",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(istio_requests_total{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m]))", "legendFormat": "req/s" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "steps": [{"color": "green", "value": null}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "title": "Kuadrant Allowed",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(kuadrant_allowed[5m]))", "legendFormat": "allowed/s" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "steps": [{"color": "green", "value": null}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "title": "Kuadrant Denied",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(kuadrant_denied[5m]))", "legendFormat": "denied/s" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "red", "value": 1}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "title": "Errors",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(istio_requests_total{source_workload=~\"maas-default-gateway.*\", response_code!=\"200\", response_code!=\"0\"}[5m]))", "legendFormat": "err/s" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "red", "value": 1}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "title": "Pipeline Step Latency (Request Path)",
+          "type": "bargauge",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])))", "legendFormat": "1. Gateway E2E (includes all)" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-provider-resolver\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-provider-resolver\"}[5m])) * 1000", "legendFormat": "2. BBR: model-provider-resolver" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-extractor\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-extractor\"}[5m])) * 1000", "legendFormat": "3. BBR: model-extractor" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"api-translation\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"api-translation\"}[5m])) * 1000", "legendFormat": "4. BBR: api-translation (req)" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"apikey-injection\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"apikey-injection\"}[5m])) * 1000", "legendFormat": "5. BBR: apikey-injection" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"response\", plugin_name=\"api-translation\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"response\", plugin_name=\"api-translation\"}[5m])) * 1000", "legendFormat": "6. BBR: api-translation (resp)" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{"color": "blue", "value": null}, {"color": "green", "value": 0.01}, {"color": "yellow", "value": 1}, {"color": "red", "value": 10}] } } },
+          "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] }, "showUnfilled": true, "valueMode": "text" }
+        },
+        {
+          "title": "E2E Latency Over Time (Gateway)",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(istio_request_duration_milliseconds_sum{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])) / sum(rate(istio_request_duration_milliseconds_count{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m]))", "legendFormat": "E2E avg" },
+            { "expr": "histogram_quantile(0.50, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])))", "legendFormat": "E2E p50" },
+            { "expr": "histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])))", "legendFormat": "E2E p95" },
+            { "expr": "histogram_quantile(0.99, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m])))", "legendFormat": "E2E p99" },
+            { "expr": "sum(rate(istio_requests_total{source_workload=~\"maas-default-gateway.*\"}[5m]))", "legendFormat": "Envoy RPS", "refId": "RPS" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10, "lineWidth": 2 } }, "overrides": [{ "matcher": { "id": "byName", "options": "E2E avg" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "E2E p99" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "E2E p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "E2E p50" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "Envoy RPS" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "reqps" }, { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }] }
+        },
+        {
+          "title": "AI Gateway Pods CPU & Memory",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 15 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\", pod!~\".*payload-ab-test.*\", pod!~\".*llm-d-inference-sim.*\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"kuadrant-system\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"maas-db\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\", pod!~\".*payload-ab-test.*\", pod!~\".*llm-d-inference-sim.*\"}) by (pod)", "legendFormat": "{{pod}} Mem", "refId": "MEM1" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"kuadrant-system\", container!=\"\", container!=\"POD\"}) by (pod)", "legendFormat": "{{pod}} Mem", "refId": "MEM2" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"maas-db\", container!=\"\", container!=\"POD\"}) by (pod)", "legendFormat": "{{pod}} Mem", "refId": "MEM3" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", container!=\"\", container!=\"POD\"}) by (pod)", "legendFormat": "{{pod}} Mem", "refId": "MEM4" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10, "lineWidth": 2 } }, "overrides": [{ "matcher": { "id": "byRegexp", "options": ".*Mem.*" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "bytes" }] }] }
+        },
+        {
+          "title": "Kuadrant Auth/RateLimit Activity",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 6, "x": 12, "y": 15 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(kuadrant_allowed[5m]))", "legendFormat": "Allowed" },
+            { "expr": "sum(rate(kuadrant_denied[5m]))", "legendFormat": "Denied" },
+            { "expr": "sum(rate(kuadrant_hits[5m]))", "legendFormat": "Cache Hits" },
+            { "expr": "sum(rate(kuadrant_errors[5m]))", "legendFormat": "Errors" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 20, "lineWidth": 2 } }, "overrides": [{ "matcher": { "id": "byName", "options": "Allowed" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "Denied" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "Errors" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }] }
+        },
+        {
+          "title": "Response Codes",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 6, "x": 18, "y": 15 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(istio_requests_total{source_workload=~\"maas-default-gateway.*\", response_code=\"200\"}[5m]))", "legendFormat": "200 OK" },
+            { "expr": "sum(rate(istio_requests_total{source_workload=~\"maas-default-gateway.*\", response_code=\"0\"}[5m]))", "legendFormat": "0 (Disconnect)" },
+            { "expr": "sum(rate(istio_requests_total{source_workload=~\"maas-default-gateway.*\", response_code=~\"4..\"}[5m]))", "legendFormat": "4xx" },
+            { "expr": "sum(rate(istio_requests_total{source_workload=~\"maas-default-gateway.*\", response_code=~\"5..\"}[5m]))", "legendFormat": "5xx" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 20, "lineWidth": 2 } }, "overrides": [{ "matcher": { "id": "byName", "options": "200 OK" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }, { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }] }
+        },
+        {
+          "title": "BBR Plugin Internals (Payload Processing)",
+          "type": "row",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+          "collapsed": false
+        },
+        {
+          "title": "Request Rate",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 23 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(bbr_success_total{namespace=\"openshift-ingress\"}[5m]))", "legendFormat": "req/s" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "steps": [{"color": "green", "value": null}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+        },
+        {
+          "title": "Total Processed",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 23 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(bbr_success_total{namespace=\"openshift-ingress\"})", "legendFormat": "Total" }],
+          "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "steps": [{"color": "blue", "value": null}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "title": "Response Latency",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 23 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"response\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"response\"}[5m]))", "legendFormat": "Avg" }],
+          "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.001}, {"color": "red", "value": 0.01}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "title": "Plugin Latency + Payload CPU",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-provider-resolver\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-provider-resolver\"}[5m]))", "legendFormat": "model-provider-resolver (req)" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-extractor\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"model-extractor\"}[5m]))", "legendFormat": "model-extractor (req)" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"api-translation\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"api-translation\"}[5m]))", "legendFormat": "api-translation (req)" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"apikey-injection\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\", plugin_name=\"apikey-injection\"}[5m]))", "legendFormat": "apikey-injection (req)" },
+            { "expr": "sum(rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"response\", plugin_name=\"api-translation\"}[5m])) / sum(rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"response\", plugin_name=\"api-translation\"}[5m]))", "legendFormat": "api-translation (resp)" },
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\", pod=~\"payload-processing.*\", container!=\"\", container!=\"POD\"}[5m]))", "legendFormat": "Payload CPU", "refId": "CPU" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } }, "overrides": [{ "matcher": { "id": "byName", "options": "Payload CPU" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "short" }, { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }] }
+        },
+        {
+          "title": "Avg Plugin Latency",
+          "type": "bargauge",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum by (plugin_name) (rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\"}[5m])) / sum by (plugin_name) (rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\"}[5m]))", "legendFormat": "{{plugin_name}} (req)" },
+            { "expr": "sum by (plugin_name) (rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"response\"}[5m])) / sum by (plugin_name) (rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"response\"}[5m]))", "legendFormat": "{{plugin_name}} (resp)" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.001}, {"color": "red", "value": 0.01}] } } },
+          "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] }, "showUnfilled": true, "valueMode": "text" }
+        },
+        {
+          "title": "Plugin Latency + Payload Memory",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 31 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum by (plugin_name) (rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"request\"}[5m])) / sum by (plugin_name) (rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"request\"}[5m]))", "legendFormat": "{{plugin_name}} (req)" },
+            { "expr": "sum by (plugin_name) (rate(bbr_plugin_duration_seconds_sum{namespace=\"openshift-ingress\", extension_point=\"response\"}[5m])) / sum by (plugin_name) (rate(bbr_plugin_duration_seconds_count{namespace=\"openshift-ingress\", extension_point=\"response\"}[5m]))", "legendFormat": "{{plugin_name}} (resp)" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"openshift-ingress\", pod=~\"payload-processing.*\", container!=\"\", container!=\"POD\"})", "legendFormat": "Payload Memory", "refId": "MEM" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } }, "overrides": [{ "matcher": { "id": "byName", "options": "Payload Memory" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "bytes" }, { "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } }] }] }
+        },
+        {
+          "title": "P99 Latency + Request Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 35 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "histogram_quantile(0.99, sum by (plugin_name, le) (rate(bbr_plugin_duration_seconds_bucket{namespace=\"openshift-ingress\", extension_point=\"request\"}[5m])))", "legendFormat": "{{plugin_name}} (req) p99" },
+            { "expr": "histogram_quantile(0.99, sum by (plugin_name, le) (rate(bbr_plugin_duration_seconds_bucket{namespace=\"openshift-ingress\", extension_point=\"response\"}[5m])))", "legendFormat": "{{plugin_name}} (resp) p99" },
+            { "expr": "sum(rate(bbr_success_total{namespace=\"openshift-ingress\"}[5m]))", "legendFormat": "Request Rate", "refId": "RATE" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } }, "overrides": [{ "matcher": { "id": "byName", "options": "Request Rate" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "reqps" }, { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }] }
+        },
+        {
+          "title": "Pod Failures Over Time",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 35 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"openshift-ingress\"}[5m])", "legendFormat": "{{pod}} restarts" },
+            { "expr": "kube_pod_status_phase{namespace=\"openshift-ingress\", phase=\"Failed\"}", "legendFormat": "{{pod}} failed" },
+            { "expr": "kube_pod_container_status_waiting_reason{namespace=\"openshift-ingress\", reason=~\"CrashLoopBackOff|Error|ImagePullBackOff\"}", "legendFormat": "{{pod}} {{reason}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 20, "lineWidth": 2 }, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}] } } }
+        },
+        {
+          "title": "Ingress & Gateway Services (openshift-ingress)",
+          "type": "row",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+          "collapsed": false
+        },
+        {
+          "title": "Per-Pod CPU % of Limit",
+          "type": "bargauge",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\"}[5m])) by (pod) / sum(kube_pod_container_resource_limits{namespace=\"openshift-ingress\", resource=\"cpu\", container!=\"\"}) by (pod) * 100", "legendFormat": "{{pod}}" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "orange", "value": 80}, {"color": "red", "value": 90}] } } },
+          "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] }, "showUnfilled": true }
+        },
+        {
+          "title": "Per-Pod Memory % of Limit",
+          "type": "bargauge",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(container_memory_working_set_bytes{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\"}) by (pod) / sum(kube_pod_container_resource_limits{namespace=\"openshift-ingress\", resource=\"memory\", container!=\"\"}) by (pod) * 100", "legendFormat": "{{pod}}" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "orange", "value": 80}, {"color": "red", "value": 90}] } } },
+          "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] }, "showUnfilled": true }
+        },
+        {
+          "title": "Gateway CPU & Memory Over Time",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\", pod!~\".*payload-ab-test.*\", pod!~\".*llm-d-inference-sim.*\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\", pod!~\".*payload-ab-test.*\", pod!~\".*llm-d-inference-sim.*\"}) by (pod)", "legendFormat": "{{pod}} Mem", "refId": "MEM" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 10 } }, "overrides": [{ "matcher": { "id": "byRegexp", "options": ".*Mem.*" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "bytes" }] }] }
+        },
+        {
+          "title": "Simulator & AB Test CPU & Memory",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\", pod=~\"payload-ab-test.*|llm-d-inference-sim.*\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"openshift-ingress\", container!=\"\", container!=\"POD\", pod=~\"payload-ab-test.*|llm-d-inference-sim.*\"}) by (pod)", "legendFormat": "{{pod}} Mem", "refId": "MEM" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 10 } }, "overrides": [{ "matcher": { "id": "byRegexp", "options": ".*Mem.*" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "bytes" }] }] }
+        },
+        {
+          "title": "Gateway Network I/O",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"openshift-ingress\", pod!~\".*payload-ab-test.*\", pod!~\".*llm-d-inference-sim.*\"}[5m])) by (pod)", "legendFormat": "{{pod}} rx" },
+            { "expr": "sum(rate(container_network_transmit_bytes_total{namespace=\"openshift-ingress\", pod!~\".*payload-ab-test.*\", pod!~\".*llm-d-inference-sim.*\"}[5m])) by (pod)", "legendFormat": "{{pod}} tx" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        },
+        {
+          "title": "Simulator & AB Test Network I/O",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"openshift-ingress\", pod=~\".*payload-ab-test.*|.*llm-d-inference-sim.*\"}[5m])) by (pod)", "legendFormat": "{{pod}} rx" },
+            { "expr": "sum(rate(container_network_transmit_bytes_total{namespace=\"openshift-ingress\", pod=~\".*payload-ab-test.*|.*llm-d-inference-sim.*\"}[5m])) by (pod)", "legendFormat": "{{pod}} tx" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        },
+        {
+          "title": "MaaS Services",
+          "type": "row",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 67 },
+          "collapsed": false
+        },
+        {
+          "title": "MaaS DB CPU % Limit",
+          "type": "gauge",
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 68 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"maas-db\", container!=\"\", container!=\"POD\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"maas-db\", resource=\"cpu\", container!=\"\"}) * 100", "legendFormat": "CPU" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 90}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "title": "MaaS DB Mem % Limit",
+          "type": "gauge",
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 68 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(container_memory_working_set_bytes{namespace=\"maas-db\", container!=\"\", container!=\"POD\"}) / sum(kube_pod_container_resource_limits{namespace=\"maas-db\", resource=\"memory\", container!=\"\"}) * 100", "legendFormat": "Memory" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 90}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "title": "MaaS API CPU % Limit",
+          "type": "gauge",
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 68 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", container!=\"\", container!=\"POD\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", resource=\"cpu\", container!=\"\"}) * 100", "legendFormat": "CPU" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 90}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "title": "MaaS API Mem % Limit",
+          "type": "gauge",
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 68 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(container_memory_working_set_bytes{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", container!=\"\", container!=\"POD\"}) / sum(kube_pod_container_resource_limits{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", resource=\"memory\", container!=\"\"}) * 100", "legendFormat": "Memory" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 90}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "title": "MaaS DB Resources",
+          "type": "timeseries",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 73 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"maas-db\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"maas-db\", container!=\"\", container!=\"POD\"}) by (pod) / 1024 / 1024 / 1024", "legendFormat": "{{pod}} Mem (GB)", "refId": "MEM" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [{ "matcher": { "id": "byRegexp", "options": ".*Mem.*" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "decgbytes" }] }] }
+        },
+        {
+          "title": "MaaS API Resources",
+          "type": "timeseries",
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 73 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" },
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"redhat-ods-applications\", pod=~\"maas-api.*\", container!=\"\", container!=\"POD\"}) by (pod) / 1024 / 1024", "legendFormat": "{{pod}} Mem (MB)", "refId": "MEM" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [{ "matcher": { "id": "byRegexp", "options": ".*Mem.*" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "decmbytes" }] }] }
+        },
+        {
+          "title": "AI Gateway (Kuadrant)",
+          "type": "row",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 79 },
+          "collapsed": false
+        },
+        {
+          "title": "Kuadrant CPU % Limit",
+          "type": "gauge",
+          "gridPos": { "h": 5, "w": 8, "x": 0, "y": 80 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "avg(sum(rate(container_cpu_usage_seconds_total{namespace=\"kuadrant-system\", container!=\"\", container!=\"POD\"}[5m])) by (pod) / sum(kube_pod_container_resource_limits{namespace=\"kuadrant-system\", resource=\"cpu\", container!=\"\"}) by (pod) * 100)", "legendFormat": "Avg CPU" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 90}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "title": "Kuadrant Mem % Limit",
+          "type": "gauge",
+          "gridPos": { "h": 5, "w": 8, "x": 8, "y": 80 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "avg(sum(container_memory_working_set_bytes{namespace=\"kuadrant-system\", container!=\"\", container!=\"POD\"}) by (pod) / sum(kube_pod_container_resource_limits{namespace=\"kuadrant-system\", resource=\"memory\", container!=\"\"}) by (pod) * 100)", "legendFormat": "Avg Mem" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 90}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "title": "Kuadrant Restarts",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 8, "x": 16, "y": 80 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [{ "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"kuadrant-system\"})", "legendFormat": "Total" }],
+          "fieldConfig": { "defaults": { "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 10}] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "title": "Authorino/Limitador Resources",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 85 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"kuadrant-system\", pod=~\"authorino.*|limitador.*\", container!=\"\", container!=\"POD\"}[5m])) by (pod)", "legendFormat": "{{pod}} CPU" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" } }
+        },
+        {
+          "title": "Kuadrant Network I/O",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 85 },
+          "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
+          "targets": [
+            { "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"kuadrant-system\"}[5m])) by (pod)", "legendFormat": "{{pod}} rx" },
+            { "expr": "sum(rate(container_network_transmit_bytes_total{namespace=\"kuadrant-system\"}[5m])) by (pod)", "legendFormat": "{{pod}} tx" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        }
+      ],
+      "schemaVersion": 39,
+      "templating": {
+        "list": [
+          {
+            "name": "DS_OPENSHIFT_PROMETHEUS",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "text": "OpenShift Prometheus", "value": "OpenShift Prometheus" },
+            "hide": 2
+          }
+        ]
+      },
+      "time": { "from": "now-1h", "to": "now" },
+      "title": "AI Gateway & MaaS Resources",
+      "uid": "ai-gateway-resources"
+    }
+CONFIGMAP_EOF
+
+ok "AI Gateway dashboard created (BBR + Ingress + MaaS + Kuadrant)"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 7. DEPLOY GRAFANA
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 info "Deploying Grafana..."
@@ -2564,6 +3109,8 @@ spec:
         app: grafana
     spec:
       serviceAccountName: ${GRAFANA_SA}
+      nodeSelector:
+        node-role.kubernetes.io/perf-test: ""
       containers:
       - name: grafana
         image: docker.io/grafana/grafana:11.4.0
@@ -2611,6 +3158,8 @@ spec:
           mountPath: /var/lib/grafana/dashboards/perf-eng
         - name: dashboard-instance-resources
           mountPath: /var/lib/grafana/dashboards/instance-resources
+        - name: dashboard-ai-gateway
+          mountPath: /var/lib/grafana/dashboards/ai-gateway
         readinessProbe:
           httpGet:
             path: /api/health
@@ -2657,6 +3206,9 @@ spec:
       - name: dashboard-instance-resources
         configMap:
           name: grafana-dashboard-instance-resources
+      - name: dashboard-ai-gateway
+        configMap:
+          name: grafana-dashboard-ai-gateway
 ---
 apiVersion: v1
 kind: Service

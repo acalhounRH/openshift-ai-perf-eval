@@ -94,6 +94,26 @@ oc exec benchmark-runner -n "${PERF_NAMESPACE}" -- bash -c '
 ok "Benchmark tools installed"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2b. GRANT MONITORING PERMISSIONS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+info "Granting cluster-monitoring-view to benchmark pod's service account..."
+oc adm policy add-cluster-role-to-user cluster-monitoring-view \
+  -z default -n "${PERF_NAMESPACE}" 2>/dev/null || true
+ok "Monitoring permissions granted"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2c. COPY LOAD TEST SCRIPT INTO POD
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LOAD_TEST_SCRIPT="${SCRIPT_DIR}/06-load-test.py"
+if [[ -f "$LOAD_TEST_SCRIPT" ]]; then
+  info "Copying 06-load-test.py into the pod..."
+  oc cp "$LOAD_TEST_SCRIPT" "${PERF_NAMESPACE}/benchmark-runner:/scripts/06-load-test.py"
+  ok "Load test script copied to /scripts/06-load-test.py"
+else
+  warn "06-load-test.py not found at ${LOAD_TEST_SCRIPT} — copy manually"
+fi
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3. VERIFY POD PLACEMENT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RUNNER_NODE=$(oc get pod benchmark-runner -n "${PERF_NAMESPACE}" -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "unknown")
@@ -113,10 +133,16 @@ echo "============================================"
 echo "  Benchmark Runner Ready"
 echo "============================================"
 echo ""
-info "Connect to the benchmark pod:"
-echo "  oc exec -it benchmark-runner -n ${PERF_NAMESPACE} -- bash"
+info "Run the load test (from your laptop):"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/06-load-test.py"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/06-load-test.py --quick"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/06-load-test.py --scale"
 echo ""
-info "Run vLLM benchmark (raw inference):"
+info "Or connect interactively:"
+echo "  oc exec -it benchmark-runner -n ${PERF_NAMESPACE} -- bash"
+echo "  python3 /scripts/06-load-test.py --scale --levels 5 10 20 40"
+echo ""
+info "Run vLLM benchmark (raw inference, inside the pod):"
 echo "  python -m vllm.benchmark_serving \\"
 echo "    --backend openai \\"
 echo "    --base-url \$VLLM_URL \\"
@@ -128,9 +154,6 @@ echo "    --seed 42"
 echo ""
 info "Copy results out when done:"
 echo "  oc cp ${PERF_NAMESPACE}/benchmark-runner:/results ./benchmark-results-\$(date +%Y%m%d)"
-echo ""
-info "Copy custom scripts into the pod:"
-echo "  oc cp my-benchmark.py ${PERF_NAMESPACE}/benchmark-runner:/scripts/"
 echo ""
 ok "Setup complete. Happy benchmarking!"
 

@@ -36,7 +36,11 @@ check "oc CLI is installed"              command -v oc
 check "kubectl is installed"             command -v kubectl
 check "ibmcloud CLI is installed"        command -v ibmcloud
 check "jq is installed"                  command -v jq
-check "yq is installed (optional)"       command -v yq || warn "yq not found — optional but helpful"
+if command -v yq >/dev/null 2>&1; then
+  ok "yq is installed (optional)"; PASS=$((PASS + 1))
+else
+  warn "yq not found — optional but helpful"
+fi
 
 # ─── IBM Cloud CLI Plugins ─────────────────────────────────────────────────
 info "Checking IBM Cloud CLI plugins..."
@@ -78,7 +82,7 @@ fi
 
 # ─── IBM Cloud CIS (DNS) ──────────────────────────────────────────────────
 info "Checking IBM Cloud Internet Services (CIS) for DNS zone: ${BASE_DOMAIN}..."
-CIS_INSTANCES=$(ibmcloud cis instances 2>/dev/null | grep -c "active" || echo "0")
+CIS_INSTANCES=$(ibmcloud cis instances 2>/dev/null | grep -c "active") || CIS_INSTANCES=0
 if [[ "$CIS_INSTANCES" -ge 1 ]]; then
   ok "At least one active CIS instance found"
   PASS=$((PASS + 1))
@@ -97,7 +101,9 @@ info "Checking VPC instance profile availability..."
 
 check_profile() {
   local profile="$1"
-  ibmcloud is instance-profiles 2>/dev/null | grep -q "${profile}"
+  local profiles
+  profiles=$(ibmcloud is instance-profiles 2>/dev/null) || true
+  echo "$profiles" | grep -q "${profile}"
 }
 
 check "${INFERENCE_WORKER_INSTANCE_TYPE} profile available"    check_profile "${INFERENCE_WORKER_INSTANCE_TYPE}"
@@ -111,7 +117,7 @@ if [[ "${USE_SIMULATOR:-false}" == "true" ]]; then
 else
   info "Checking GPU instance quota..."
   GPU_FAMILY="${INFERENCE_WORKER_INSTANCE_TYPE%%-*}"          # e.g. gx3 from gx3-64x320x4l40s
-  GPU_QUOTA_CHECK=$(ibmcloud is instance-profiles 2>/dev/null | grep -c "${GPU_FAMILY}" || echo "0")
+  GPU_QUOTA_CHECK=$(ibmcloud is instance-profiles 2>/dev/null | grep -c "${GPU_FAMILY}") || GPU_QUOTA_CHECK=0
   if [[ "$GPU_QUOTA_CHECK" -ge 1 ]]; then
     ok "GPU instance profiles (${GPU_FAMILY}) are available in this region"
     PASS=$((PASS + 1))
