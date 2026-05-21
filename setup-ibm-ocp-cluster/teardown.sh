@@ -17,10 +17,14 @@ warn "This will DESTROY the entire cluster and all data."
 warn "VPC, subnets, load balancers, instances — everything."
 echo ""
 
-read -rp "Type the cluster name to confirm (${CLUSTER_NAME}): " confirm
-if [[ "$confirm" != "${CLUSTER_NAME}" ]]; then
-  err "Confirmation failed. Aborting."
-  exit 1
+if [[ "${1:-}" == "--yes" ]]; then
+  info "Skipping confirmation (--yes flag)"
+else
+  read -rp "Type the cluster name to confirm (${CLUSTER_NAME}): " confirm
+  if [[ "$confirm" != "${CLUSTER_NAME}" ]]; then
+    err "Confirmation failed. Aborting."
+    exit 1
+  fi
 fi
 
 echo ""

@@ -26,7 +26,6 @@ import json
 import math
 import os
 import ssl
-import subprocess
 import sys
 import time
 import urllib.request
@@ -52,37 +51,10 @@ def ok(msg):    print(f"{C.OK}  {msg}")
 def warn(msg):  print(f"{C.WARN} {msg}")
 def bail(msg):  print(f"{C.ERR} {msg}"); sys.exit(1)
 
-# ─── OpenShift helpers ───────────────────────────────────────────────────────
+# ─── In-cluster constants ────────────────────────────────────────────────────
 
-def oc(*args, capture=True, check=True):
-    """Run an oc command and return stdout."""
-    result = subprocess.run(
-        ["oc"] + list(args),
-        capture_output=capture, text=True,
-        timeout=300,
-    )
-    if check and result.returncode != 0:
-        raise RuntimeError(f"oc {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip() if capture else ""
-
-def oc_exec_curl(namespace: str, deployment: str, url: str, method="GET",
-                 data: Optional[dict] = None) -> dict:
-    """Execute a curl inside a pod and return parsed JSON."""
-    cmd = ["exec", f"deployment/{deployment}", "-n", namespace, "--",
-           "curl", "-s", url]
-    if method == "POST":
-        cmd.extend(["-X", "POST", "-H", "Content-Type: application/json"])
-        if data:
-            cmd.extend(["-d", json.dumps(data)])
-    result = subprocess.run(
-        ["oc"] + cmd, capture_output=True, text=True, timeout=60,
-    )
-    if result.returncode != 0:
-        return {}
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {}
+SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+PROMETHEUS_INTERNAL = "thanos-querier.openshift-monitoring.svc:9091"
 
 # ─── Prometheus client ───────────────────────────────────────────────────────
 
@@ -96,12 +68,16 @@ class PrometheusClient:
 
     def connect(self) -> bool:
         try:
-            self.host = oc("get", "route", "thanos-querier",
-                           "-n", "openshift-monitoring",
-                           "-o", "jsonpath={.spec.host}")
-            self.token = oc("create", "token", "prometheus-k8s",
-                            "-n", "openshift-monitoring", "--duration=2h")
-            return bool(self.host and self.token)
+            token_path = Path(SA_TOKEN_PATH)
+            if not token_path.exists():
+                warn(f"SA token not found at {SA_TOKEN_PATH}")
+                return False
+            self.token = token_path.read_text().strip()
+            self.host = PROMETHEUS_INTERNAL
+            url = f"https://{self.host}/api/v1/query?query=up"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.token}"})
+            urllib.request.urlopen(req, context=self._ctx, timeout=10)
+            return True
         except Exception as e:
             warn(f"Cannot connect to Prometheus: {e}")
             return False
@@ -187,27 +163,21 @@ class GrafanaAnnotator:
         user = os.environ.get("GRAFANA_ADMIN_USER", "admin")
         pw = os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")
         self._auth = "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
-        try:
-            host = oc("get", "route", "grafana", "-n", namespace,
-                       "-o", "jsonpath={.spec.host}", check=False)
-            if host:
-                self.url = f"https://{host}"
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-                req = urllib.request.Request(
-                    f"{self.url}/api/annotations",
-                    headers={"Authorization": self._auth},
-                )
-                resp = urllib.request.urlopen(req, context=ctx, timeout=5)
-                if resp.status == 200:
-                    self.enabled = True
-                    ok("Grafana annotations API reachable")
-        except Exception:
-            pass
         self._ctx = ssl.create_default_context()
         self._ctx.check_hostname = False
         self._ctx.verify_mode = ssl.CERT_NONE
+        try:
+            self.url = f"http://grafana.{namespace}.svc:3000"
+            req = urllib.request.Request(
+                f"{self.url}/api/annotations",
+                headers={"Authorization": self._auth},
+            )
+            resp = urllib.request.urlopen(req, timeout=5)
+            if resp.status == 200:
+                self.enabled = True
+                ok("Grafana annotations API reachable")
+        except Exception:
+            pass
 
     def annotate(self, time_ms: int, text: str, tags: list[str],
                  time_end_ms: Optional[int] = None):
@@ -460,23 +430,26 @@ PROMPTS_SHORT = [
 ]
 
 
-def send_request(namespace: str, model: str, prompt: str, max_tokens: int) -> bool:
-    """Send a chat completion request via oc exec. Returns True on success."""
+def send_request(llama_stack_url: str, model: str, prompt: str, max_tokens: int) -> bool:
+    """Send a chat completion request via direct HTTP. Returns True on success."""
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
-    })
-    result = subprocess.run(
-        ["oc", "exec", "deployment/llama-stack", "-n", namespace, "--",
-         "curl", "-s", "http://localhost:8321/v1/chat/completions",
-         "-H", "Content-Type: application/json", "-d", payload],
-        capture_output=True, text=True, timeout=120,
+    }).encode()
+    req = urllib.request.Request(
+        f"{llama_stack_url}/v1/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json"},
     )
-    return result.returncode == 0
+    try:
+        resp = urllib.request.urlopen(req, timeout=120)
+        return resp.status == 200
+    except Exception:
+        return False
 
 
-def send_batch(namespace: str, model: str, count: int, max_tokens: int,
+def send_batch(llama_stack_url: str, model: str, count: int, max_tokens: int,
                prompts: list[str]) -> int:
     """Send `count` concurrent requests. Returns error count."""
     errors = 0
@@ -484,7 +457,7 @@ def send_batch(namespace: str, model: str, count: int, max_tokens: int,
         futures = []
         for i in range(count):
             prompt = prompts[i % len(prompts)]
-            futures.append(pool.submit(send_request, namespace, model, prompt, max_tokens))
+            futures.append(pool.submit(send_request, llama_stack_url, model, prompt, max_tokens))
         for f in as_completed(futures):
             if not f.result():
                 errors += 1
@@ -796,8 +769,8 @@ def print_scaling_report(results: list[ScaleMetrics], csv_path: str):
 
 # ─── Standard load test (4-phase) ───────────────────────────────────────────
 
-def run_standard_test(namespace: str, model: str, mode: str, custom_tag: str,
-                      grafana: GrafanaAnnotator):
+def run_standard_test(namespace: str, llama_stack_url: str, model: str,
+                      mode: str, custom_tag: str, grafana: GrafanaAnnotator):
     profiles = {
         "quick":   {"warmup": 2, "batches": 2, "concurrency": 3, "burst": 5,  "tail": 2, "max_tok": 80},
         "heavy":   {"warmup": 5, "batches": 10, "concurrency": 8, "burst": 15, "tail": 5, "max_tok": 300},
@@ -826,7 +799,7 @@ def run_standard_test(namespace: str, model: str, mode: str, custom_tag: str,
     grafana.annotate(epoch_ms(), f"Phase 1: Warm-up ({p['warmup']} sequential)", base_tags + ["phase-warmup"])
     info(f"Phase 1: Warm-up ({p['warmup']} sequential)...")
     for i in range(p["warmup"]):
-        send_request(namespace, model, PROMPTS_SHORT[i % len(PROMPTS_SHORT)], p["max_tok"])
+        send_request(llama_stack_url, model, PROMPTS_SHORT[i % len(PROMPTS_SHORT)], p["max_tok"])
         print(f"  warm-up {i+1}/{p['warmup']} done")
 
     # Phase 2: Sustained
@@ -834,14 +807,14 @@ def run_standard_test(namespace: str, model: str, mode: str, custom_tag: str,
     grafana.annotate(epoch_ms(), f"Phase 2: Sustained ({p['batches']}×{p['concurrency']})", base_tags + ["phase-sustained"])
     info(f"Phase 2: Sustained ({p['batches']} × {p['concurrency']} = {p['batches']*p['concurrency']})...")
     for batch in range(p["batches"]):
-        send_batch(namespace, model, p["concurrency"], p["max_tok"], PROMPTS_LONG)
+        send_batch(llama_stack_url, model, p["concurrency"], p["max_tok"], PROMPTS_LONG)
         print(f"  batch {batch+1}/{p['batches']} done")
 
     # Phase 3: Burst
     print()
     grafana.annotate(epoch_ms(), f"Phase 3: Burst ({p['burst']} concurrent)", base_tags + ["phase-burst"])
     info(f"Phase 3: Burst ({p['burst']} concurrent)...")
-    send_batch(namespace, model, p["burst"], p["max_tok"], PROMPTS_LONG)
+    send_batch(llama_stack_url, model, p["burst"], p["max_tok"], PROMPTS_LONG)
     print(f"  burst done ({p['burst']} concurrent)")
 
     # Phase 4: Tail
@@ -849,7 +822,7 @@ def run_standard_test(namespace: str, model: str, mode: str, custom_tag: str,
     grafana.annotate(epoch_ms(), f"Phase 4: Tail ({p['tail']} sequential)", base_tags + ["phase-tail"])
     info(f"Phase 4: Tail ({p['tail']} sequential)...")
     for i in range(p["tail"]):
-        send_request(namespace, model, PROMPTS_SHORT[i % len(PROMPTS_SHORT)], p["max_tok"])
+        send_request(llama_stack_url, model, PROMPTS_SHORT[i % len(PROMPTS_SHORT)], p["max_tok"])
         print(f"  tail {i+1}/{p['tail']} done")
 
     run_end = epoch_ms()
@@ -879,14 +852,15 @@ def run_standard_test(namespace: str, model: str, mode: str, custom_tag: str,
 
 # ─── Scaling test ────────────────────────────────────────────────────────────
 
-def run_scaling_test(namespace: str, model: str, levels: list[int],
-                     custom_tag: str, grafana: GrafanaAnnotator,
-                     prom: PrometheusClient):
+def run_scaling_test(namespace: str, llama_stack_url: str, model: str,
+                     levels: list[int], custom_tag: str,
+                     grafana: GrafanaAnnotator, prom: PrometheusClient):
     reqs_per_level = 800
     max_tok = 150
     model_short = model.split("/")[-1]
     run_id = f"scale-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    csv_path = f"/tmp/{run_id}-results.csv"
+    results_dir = Path("/results") if Path("/results").is_dir() and os.access("/results", os.W_OK) else Path("/tmp")
+    csv_path = str(results_dir / f"{run_id}-results.csv")
 
     print(f"\n╔{'═'*60}╗")
     print(f"║  CONCURRENCY SCALING TEST{' '*35}║")
@@ -917,7 +891,7 @@ def run_scaling_test(namespace: str, model: str, levels: list[int],
 
         if conc == 1:
             for i in range(reqs_per_level):
-                ok_ = send_request(namespace, model,
+                ok_ = send_request(llama_stack_url, model,
                                    PROMPTS_LONG[i % len(PROMPTS_LONG)], max_tok)
                 if not ok_:
                     errors += 1
@@ -926,7 +900,7 @@ def run_scaling_test(namespace: str, model: str, levels: list[int],
             sent = 0
             while sent < reqs_per_level:
                 batch = min(conc, reqs_per_level - sent)
-                errs = send_batch(namespace, model, batch, max_tok, PROMPTS_LONG)
+                errs = send_batch(llama_stack_url, model, batch, max_tok, PROMPTS_LONG)
                 errors += errs
                 sent += batch
                 print(".", end="", flush=True)
@@ -1004,46 +978,32 @@ def main():
     else:
         mode = "default"
 
-    # Load config.env if present
-    script_dir = Path(__file__).parent
-    config_env = script_dir / "config.env"
     namespace = os.environ.get("PERF_NAMESPACE", "perf-testing")
-    if config_env.exists():
-        result = subprocess.run(
-            ["bash", "-c", f"source {config_env} && env"],
-            capture_output=True, text=True,
-        )
-        for line in result.stdout.splitlines():
-            if "=" in line:
-                k, _, v = line.partition("=")
-                if k == "PERF_NAMESPACE":
-                    namespace = v
+    llama_stack_url = os.environ.get("LLAMA_STACK_URL", "http://llama-stack:8321")
 
-    # Verify cluster connection
+    # Discover model via direct HTTP
+    info(f"Discovering model from {llama_stack_url}...")
     try:
-        oc("whoami")
-    except Exception:
-        bail("Cannot connect to cluster. Set KUBECONFIG.")
-
-    # Discover model
-    info("Discovering model from Llama Stack...")
-    resp = oc_exec_curl(namespace, "llama-stack", "http://localhost:8321/v1/models")
-    try:
-        model = resp["data"][0]["id"]
+        req = urllib.request.Request(f"{llama_stack_url}/v1/models")
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read())
+        model = data["data"][0]["id"]
         ok(f"Discovered model: {model}")
-    except (KeyError, IndexError, TypeError):
-        bail("Could not discover model. Is Llama Stack running?")
+    except Exception as e:
+        bail(f"Cannot reach Llama Stack at {llama_stack_url}: {e}")
 
+    results_dir = Path("/results") if Path("/results").is_dir() and os.access("/results", os.W_OK) else Path("/tmp")
     grafana = GrafanaAnnotator(namespace)
 
     if mode == "scale":
         prom = PrometheusClient()
         if not prom.connect():
-            bail("Cannot reach Prometheus. Scaling test requires metric collection.")
+            bail("Cannot reach Prometheus. Scaling test requires metric collection.\n"
+                 "       Ensure the pod's ServiceAccount has cluster-monitoring-view.")
         ok("Connected to Prometheus")
-        run_scaling_test(namespace, model, args.levels, args.tag, grafana, prom)
+        run_scaling_test(namespace, llama_stack_url, model, args.levels, args.tag, grafana, prom)
     else:
-        run_standard_test(namespace, model, mode, args.tag, grafana)
+        run_standard_test(namespace, llama_stack_url, model, mode, args.tag, grafana)
 
 
 if __name__ == "__main__":

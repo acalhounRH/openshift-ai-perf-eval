@@ -25,6 +25,22 @@ oc create namespace "${PERF_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
 ok "Namespace ${PERF_NAMESPACE} ready"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 1b. ADDITIONAL PULL SECRET (for private registries like quay.io/rhoai)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if [[ -n "${ADDITIONAL_PULL_SECRET_FILE:-}" && -f "${ADDITIONAL_PULL_SECRET_FILE}" ]]; then
+  info "Configuring additional pull secret from ${ADDITIONAL_PULL_SECRET_FILE}..."
+  oc create secret generic additional-pull-secret \
+    --from-file=.dockerconfigjson="${ADDITIONAL_PULL_SECRET_FILE}" \
+    --type=kubernetes.io/dockerconfigjson \
+    -n "${PERF_NAMESPACE}" \
+    --dry-run=client -o yaml | oc apply -f -
+  oc secrets link default additional-pull-secret --for=pull -n "${PERF_NAMESPACE}" 2>/dev/null || true
+  ok "Additional pull secret configured in ${PERF_NAMESPACE}"
+elif [[ -n "${ADDITIONAL_PULL_SECRET_FILE:-}" ]]; then
+  warn "ADDITIONAL_PULL_SECRET_FILE is set but file not found: ${ADDITIONAL_PULL_SECRET_FILE}"
+fi
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 2. CREATE PERSISTENT VOLUME CLAIMS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 info "Creating PVCs..."

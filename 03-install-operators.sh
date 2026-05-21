@@ -153,9 +153,11 @@ if [[ "$NFD_LABELED" == "false" ]]; then
       "feature.node.kubernetes.io/kernel-version.full=${KERNEL_VERSION}" \
       --overwrite
     if [[ -n "$OSTREE_VERSION" ]]; then
+      VERSION_ID=$(echo "$OSTREE_VERSION" | grep -oE '^[0-9]+\.[0-9]+')
       oc label node "$GPU_NODE" \
         "feature.node.kubernetes.io/system-os_release.OSTREE_VERSION=${OSTREE_VERSION}" \
         "feature.node.kubernetes.io/system-os_release.ID=rhcos" \
+        "feature.node.kubernetes.io/system-os_release.VERSION_ID=${VERSION_ID}" \
         --overwrite
     fi
     ok "Manual labels applied to ${GPU_NODE}"
@@ -164,19 +166,22 @@ if [[ "$NFD_LABELED" == "false" ]]; then
   fi
 fi
 
-# The GPU Operator needs OSTREE_VERSION label for DTK driver compilation.
-# NFD may not set this even when running, so always ensure it exists.
+# The GPU Operator needs OSTREE_VERSION and VERSION_ID labels for DTK driver
+# compilation. NFD may not set these even when running, so always ensure they exist.
 GPU_NODE=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -1)
 if [[ -n "$GPU_NODE" ]]; then
   EXISTING_OSTREE=$(oc get node "$GPU_NODE" -o jsonpath='{.metadata.labels.feature\.node\.kubernetes\.io/system-os_release\.OSTREE_VERSION}' 2>/dev/null)
-  if [[ -z "$EXISTING_OSTREE" ]]; then
+  EXISTING_VERSION_ID=$(oc get node "$GPU_NODE" -o jsonpath='{.metadata.labels.feature\.node\.kubernetes\.io/system-os_release\.VERSION_ID}' 2>/dev/null)
+  if [[ -z "$EXISTING_OSTREE" || -z "$EXISTING_VERSION_ID" ]]; then
     OS_IMAGE=$(oc get node "$GPU_NODE" -o jsonpath='{.status.nodeInfo.osImage}' 2>/dev/null)
     OSTREE_VERSION=$(echo "$OS_IMAGE" | grep -oE '[0-9]+\.[0-9]+\.[0-9]{8,}-[0-9]+' || echo "")
     if [[ -n "$OSTREE_VERSION" ]]; then
-      info "Setting OSTREE_VERSION=${OSTREE_VERSION} on ${GPU_NODE} (required for DTK)"
+      VERSION_ID=$(echo "$OSTREE_VERSION" | grep -oE '^[0-9]+\.[0-9]+')
+      info "Ensuring OSTREE_VERSION=${OSTREE_VERSION} and VERSION_ID=${VERSION_ID} on ${GPU_NODE}"
       oc label node "$GPU_NODE" \
         "feature.node.kubernetes.io/system-os_release.OSTREE_VERSION=${OSTREE_VERSION}" \
         "feature.node.kubernetes.io/system-os_release.ID=rhcos" \
+        "feature.node.kubernetes.io/system-os_release.VERSION_ID=${VERSION_ID}" \
         --overwrite
     fi
   fi
