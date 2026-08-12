@@ -3,7 +3,7 @@ os.environ["HOME"] = "/tmp"
 sys.path.insert(0, "/tmp/pylib/lib/python3.11/site-packages")
 from locust import HttpUser, task, between
 
-MODEL = "vllm-inference/Qwen/Qwen2.5-7B-Instruct"
+MODEL = os.environ.get("MODEL_ID", "simulator")
 
 PROMPTS = [
     "Explain the concept of quantum entanglement in simple terms.",

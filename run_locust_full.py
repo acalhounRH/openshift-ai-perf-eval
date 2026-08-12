@@ -9,7 +9,9 @@ import sys, os, subprocess, json, time, csv, io
 os.environ["HOME"] = "/tmp"
 sys.path.insert(0, "/tmp/pylib/lib/python3.11/site-packages")
 
-LLAMA_STACK_URL = "http://llama-stack:8321"
+LLAMA_STACK_URL = os.environ.get(
+    "LLAMA_STACK_URL", "http://ogx-server-service:8321"
+)
 CONCURRENCY_LEVELS = [5, 10, 20, 40, 60, 80, 100, 150, 200, 300, 500, 1000]
 TARGET_REQUESTS = 800
 

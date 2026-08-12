@@ -50,7 +50,7 @@ check_warn() {
 info "── Cluster Health ──"
 
 NODE_COUNT=$(oc get nodes --no-headers 2>/dev/null | grep -c "Ready" || echo 0)
-EXPECTED_NODES=8
+EXPECTED_NODES=6
 check "All ${EXPECTED_NODES} nodes are Ready (found: ${NODE_COUNT})" test "${NODE_COUNT}" -eq "${EXPECTED_NODES}"
 
 # Masters have no user pods
@@ -70,14 +70,11 @@ check "etcd members available" test "${ETCD_MEMBERS}" = "True"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 info "── Node Roles ──"
 
-APP_LABELED=$(oc get nodes -l node-role.kubernetes.io/app-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
-check "App worker node labeled (found: ${APP_LABELED})" test "${APP_LABELED}" -ge 1
+OGX_LABELED=$(oc get nodes -l node-role.kubernetes.io/ogx-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
+check "OGX worker node labeled (found: ${OGX_LABELED})" test "${OGX_LABELED}" -ge 1
 
-TOOLS_LABELED=$(oc get nodes -l node-role.kubernetes.io/tools-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
-check "Tools worker node labeled (found: ${TOOLS_LABELED})" test "${TOOLS_LABELED}" -ge 1
-
-RAG_LABELED=$(oc get nodes -l node-role.kubernetes.io/rag-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
-check "RAG worker node labeled (found: ${RAG_LABELED})" test "${RAG_LABELED}" -ge 1
+POSTGRES_LABELED=$(oc get nodes -l node-role.kubernetes.io/postgres-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
+check "Postgres worker node labeled (found: ${POSTGRES_LABELED})" test "${POSTGRES_LABELED}" -ge 1
 
 LOADGEN_LABELED=$(oc get nodes -l node-role.kubernetes.io/loadgen-worker --no-headers 2>/dev/null | wc -l | tr -d ' ')
 check "Load-gen worker node labeled (found: ${LOADGEN_LABELED})" test "${LOADGEN_LABELED}" -ge 1
@@ -124,16 +121,20 @@ check_pod_on_node() {
   fi
 }
 
-check_pod_on_node "app=postgresql" "${APP_WORKER_INSTANCE_TYPE}" "PostgreSQL pod on app worker"
+check_pod_on_node "app=postgresql" "${POSTGRES_WORKER_INSTANCE_TYPE}" "PostgreSQL pod on postgres worker"
 
-LLAMA_PODS=$(oc get pods -l app=llama-stack -n "${PERF_NAMESPACE}" --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
-check_warn "Llama Stack pod exists (found: ${LLAMA_PODS})" test "${LLAMA_PODS}" -ge 1
+OGX_PODS=$(oc get pods -l app=ogx -n "${PERF_NAMESPACE}" --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
+check_warn "OGX pod exists — operator-managed (found: ${OGX_PODS})" test "${OGX_PODS}" -ge 1
+
+if [[ "${OGX_PODS}" -ge 1 ]]; then
+  check_pod_on_node "app=ogx" "${OGX_WORKER_INSTANCE_TYPE}" "OGX pod on OGX worker"
+fi
 
 VLLM_PODS=$(oc get pods -l app=vllm-inference -n "${PERF_NAMESPACE}" --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
 check_warn "vLLM pod exists (found: ${VLLM_PODS})" test "${VLLM_PODS}" -ge 1
 
 if [[ "${MCP_KUBERNETES_ENABLED}" == "true" ]]; then
-  check_pod_on_node "app=kubernetes-mcp-server" "${TOOLS_WORKER_INSTANCE_TYPE}" "K8s MCP server on tools worker"
+  check_pod_on_node "app=kubernetes-mcp-server" "${OGX_WORKER_INSTANCE_TYPE}" "K8s MCP server on OGX worker"
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -161,6 +162,10 @@ info "── Services ──"
 
 check "postgresql service exists" \
   oc get svc postgresql -n "${PERF_NAMESPACE}"
+
+OGX_SVC_NAME="${OGX_SERVER_NAME}-service"
+check_warn "OGX service exists (${OGX_SVC_NAME})" \
+  oc get svc "${OGX_SVC_NAME}" -n "${PERF_NAMESPACE}"
 
 check_warn "kubernetes-mcp-server service exists" \
   oc get svc kubernetes-mcp-server -n "${PERF_NAMESPACE}"
@@ -205,8 +210,8 @@ if [[ "${USE_SIMULATOR:-false}" != "true" ]]; then
 else
   VLLM_POD=$(oc get pod -l app=vllm-inference -n "${PERF_NAMESPACE}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
   if [[ -n "$VLLM_POD" ]]; then
-    check "Simulator pod is running" \
-      oc exec "${VLLM_POD}" -n "${PERF_NAMESPACE}" -- test -f /proc/1/status
+    SIM_READY=$(oc get pod "${VLLM_POD}" -n "${PERF_NAMESPACE}" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)
+    check "Simulator pod is running" test "${SIM_READY}" = "true"
   fi
 fi
 

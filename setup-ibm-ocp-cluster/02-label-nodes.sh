@@ -47,16 +47,16 @@ info "  Region/Zone:    ${IBM_REGION} / ${IBM_ZONE}"
 info "  Subnet:         ${IBM_SUBNET}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 1. LABEL THE INITIAL WORKER AS APP-WORKER
+# 1. LABEL THE INITIAL WORKER AS LOADGEN-WORKER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-info "Labeling initial worker node as app-worker..."
-APP_NODE=$(oc get nodes \
+info "Labeling initial worker node as loadgen-worker (simulator + GuideLLM)..."
+LOADGEN_NODE=$(oc get nodes \
   -l "node-role.kubernetes.io/worker,!node-role.kubernetes.io/master" \
   --no-headers -o custom-columns=':metadata.name' 2>/dev/null | head -1)
 
-if [[ -n "$APP_NODE" ]]; then
-  oc label node "${APP_NODE}" node-role.kubernetes.io/app-worker="" --overwrite
-  ok "App worker labeled: ${APP_NODE}"
+if [[ -n "$LOADGEN_NODE" ]]; then
+  oc label node "${LOADGEN_NODE}" node-role.kubernetes.io/loadgen-worker="" --overwrite
+  ok "Loadgen worker labeled: ${LOADGEN_NODE}"
 else
   warn "No worker node found yet — label manually after node is ready"
 fi
@@ -119,42 +119,29 @@ EOF
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 2. CREATE INFERENCE WORKER MACHINESET
+# 2. CREATE OGX WORKER MACHINESET
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-INFERENCE_MS_NAME="${INFRA_ID}-inference-worker-${IBMCLOUD_ZONE}"
-create_machineset "${INFERENCE_MS_NAME}" "${INFERENCE_WORKER_INSTANCE_TYPE}" "inference-worker"
+OGX_MS_NAME="${INFRA_ID}-ogx-worker-${IBMCLOUD_ZONE}"
+create_machineset "${OGX_MS_NAME}" "${OGX_WORKER_INSTANCE_TYPE}" "ogx-worker"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 3. CREATE TOOLS WORKER MACHINESET
+# 3. CREATE POSTGRESQL WORKER MACHINESET
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TOOLS_MS_NAME="${INFRA_ID}-tools-worker-${IBMCLOUD_ZONE}"
-create_machineset "${TOOLS_MS_NAME}" "${TOOLS_WORKER_INSTANCE_TYPE}" "tools-worker"
+POSTGRES_MS_NAME="${INFRA_ID}-postgres-worker-${IBMCLOUD_ZONE}"
+create_machineset "${POSTGRES_MS_NAME}" "${POSTGRES_WORKER_INSTANCE_TYPE}" "postgres-worker"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 4. CREATE RAG WORKER MACHINESET
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RAG_MS_NAME="${INFRA_ID}-rag-worker-${IBMCLOUD_ZONE}"
-create_machineset "${RAG_MS_NAME}" "${RAG_WORKER_INSTANCE_TYPE}" "rag-worker"
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 5. CREATE LOADGEN WORKER MACHINESET
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-LOADGEN_MS_NAME="${INFRA_ID}-loadgen-worker-${IBMCLOUD_ZONE}"
-create_machineset "${LOADGEN_MS_NAME}" "${LOADGEN_WORKER_INSTANCE_TYPE}" "loadgen-worker"
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 6. WAIT FOR NEW NODES
+# 4. WAIT FOR NEW NODES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 info "Waiting for new worker nodes to provision (5-10 minutes)..."
 echo ""
 
 for i in $(seq 1 60); do
-  INFERENCE_READY=$(oc get nodes -l node-role.kubernetes.io/inference-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
-  TOOLS_READY=$(oc get nodes -l node-role.kubernetes.io/tools-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
-  RAG_READY=$(oc get nodes -l node-role.kubernetes.io/rag-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  OGX_READY=$(oc get nodes -l node-role.kubernetes.io/ogx-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
+  POSTGRES_READY=$(oc get nodes -l node-role.kubernetes.io/postgres-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
   LOADGEN_READY=$(oc get nodes -l node-role.kubernetes.io/loadgen-worker --no-headers 2>/dev/null | grep -c " Ready" || true)
 
-  if [[ "$INFERENCE_READY" -ge 1 && "$TOOLS_READY" -ge 1 && "$RAG_READY" -ge 1 && "$LOADGEN_READY" -ge 1 ]]; then
+  if [[ "$OGX_READY" -ge 1 && "$POSTGRES_READY" -ge 1 && "$LOADGEN_READY" -ge 1 ]]; then
     echo ""
     ok "All worker nodes are ready"
     break
@@ -175,7 +162,7 @@ oc get machinesets -n openshift-machine-api
 echo ""
 
 info "Node roles:"
-oc get nodes -L node-role.kubernetes.io/app-worker,node-role.kubernetes.io/inference-worker,node-role.kubernetes.io/tools-worker,node-role.kubernetes.io/rag-worker,node-role.kubernetes.io/loadgen-worker
+oc get nodes -L node-role.kubernetes.io/ogx-worker,node-role.kubernetes.io/postgres-worker,node-role.kubernetes.io/loadgen-worker
 echo ""
 
 ok "Node setup complete."

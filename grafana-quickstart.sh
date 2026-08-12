@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # ============================================================================
 # grafana-quickstart.sh — Deploy standalone Grafana with OCP, GPU, LLM,
-#                          Llama Stack, and Responses API evaluation dashboards
+#                          OGX, and Responses API evaluation dashboards
 #
 # STANDALONE: This script is self-contained. It can run on any OpenShift
-# cluster with an AI inference stack (vLLM + Llama Stack). If config.env
+# cluster with an AI inference stack (vLLM + OGX). If config.env
 # exists alongside this script, it will be sourced for PERF_NAMESPACE and
 # helper functions. Otherwise, standalone defaults are used.
 #
 # Prerequisites (auto-detected and created if missing):
 #   - User workload monitoring enabled
 #   - ServiceMonitors for vLLM, OTel Collector, DCGM exporter
-#   - OTel Collector for Llama Stack metrics
+#   - OTel Collector for OGX metrics
 #
 # Usage:
 #   bash ./grafana-quickstart.sh                         # deploy (default ns: perf-testing)
@@ -114,7 +114,7 @@ else
   ok "vLLM ServiceMonitor already exists"
 fi
 
-# OTel Collector ServiceMonitor — scrapes Llama Stack metrics converted to Prometheus format
+# OTel Collector ServiceMonitor — scrapes OGX metrics converted to Prometheus format
 if ! oc get servicemonitor otel-collector-metrics -n "${GRAFANA_NS}" >/dev/null 2>&1; then
   info "Creating OTel Collector ServiceMonitor..."
   oc apply -f - <<EOF
@@ -581,7 +581,7 @@ data:
 CONFIGMAP_EOF
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 6. LLM INFERENCE DASHBOARD (vLLM + Llama Stack)
+# 6. LLM INFERENCE DASHBOARD (vLLM + OGX)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 apply_cm <<'CONFIGMAP_EOF'
 apiVersion: v1
@@ -715,17 +715,17 @@ data:
           "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — HTTP Latency (OTel)",
+          "title": "OGX — HTTP Latency (OTel)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             {
-              "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\"}[5m])) by (le)) * 1000",
               "legendFormat": "p50"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\"}[5m])) by (le)) * 1000",
               "legendFormat": "p95"
             }
           ],
@@ -778,30 +778,30 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [{ "matcher": { "id": "byName", "options": "prefix cache hit %" }, "properties": [{ "id": "unit", "value": "percent" }] }] }
         },
         {
-          "title": "Llama Stack — HTTP Request Rate by Endpoint",
+          "title": "OGX — HTTP Request Rate by Endpoint",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             {
-              "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target!=\"\"}[5m])) by (http_target)",
+              "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target!=\"\"}[5m])) by (http_target)",
               "legendFormat": "{{http_target}}"
             }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Active Requests & Error Rate",
+          "title": "OGX — Active Requests & Error Rate",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             {
-              "expr": "http_server_active_requests{service_name=\"llama-stack\"}",
+              "expr": "ogx_concurrent_requests{service_name=\"ogx\"}",
               "legendFormat": "active HTTP requests"
             },
             {
-              "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_status_code!~\"2..\"}[5m]))",
+              "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_status_code!~\"2..\"}[5m]))",
               "legendFormat": "errors/s (non-2xx)"
             }
           ],
@@ -847,7 +847,7 @@ data:
         ]
       },
       "time": { "from": "now-1h", "to": "now" },
-      "title": "LLM Inference (vLLM + Llama Stack)",
+      "title": "LLM Inference (vLLM + OGX)",
       "uid": "llm-inference"
     }
 CONFIGMAP_EOF
@@ -952,25 +952,25 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — HTTP Server Latency (OTel)",
+          "title": "OGX — HTTP Server Latency (OTel)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 8, "y": 15 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "p95" }
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\"}[5m])) by (le)) * 1000", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\"}[5m])) by (le)) * 1000", "legendFormat": "p95" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Token Throughput & Request Rate",
+          "title": "OGX — Token Throughput & Request Rate",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 15 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
             { "expr": "sum(rate(vllm:generation_tokens_total[1m]))", "legendFormat": "output tok/s" },
             { "expr": "sum(rate(vllm:prompt_tokens_total[1m]))", "legendFormat": "input tok/s" },
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "LS requests/s" }
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "OGX requests/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
@@ -1132,20 +1132,20 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — HTTP Server Latency (p50 / p95 / p99)",
-          "description": "End-to-end HTTP latency of Llama Stack API endpoints (includes vLLM inference round-trip)",
+          "title": "OGX — HTTP Server Latency (p50 / p95 / p99)",
+          "description": "End-to-end HTTP latency of OGX API endpoints (includes vLLM inference round-trip)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p95" },
-            { "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p99" }
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p99" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Token Throughput (vLLM engine)",
+          "title": "OGX — Token Throughput (vLLM engine)",
           "description": "Rate of tokens processed at the vLLM engine level — prompt (input) and generation (output)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
@@ -1157,7 +1157,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Avg Tokens per Request",
+          "title": "OGX — Avg Tokens per Request",
           "description": "Average prompt and generation tokens per vLLM request — computed from vLLM token counters and request success rate",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
@@ -1169,24 +1169,24 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — API Request Rate",
+          "title": "OGX — API Request Rate",
           "description": "HTTP request rate by endpoint — chat completions, responses, health",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Avg API Latency",
+          "title": "OGX — Avg API Latency",
           "description": "Average HTTP server latency across inference endpoints (simpler view for trending)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "avg latency" }
+            { "expr": "sum(rate(ogx_request_duration_seconds_sum{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) * 1000", "legendFormat": "avg latency" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
@@ -1197,50 +1197,50 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — API Request Rate by Endpoint",
+          "title": "OGX — API Request Rate by Endpoint",
           "description": "HTTP requests/sec broken down by API endpoint",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",service=\"otel-collector-collector\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — API Latency by Endpoint (p95)",
-          "description": "95th percentile HTTP server latency for each Llama Stack endpoint",
+          "title": "OGX — API Latency by Endpoint (p95)",
+          "description": "95th percentile HTTP server latency for each OGX endpoint",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_target=~\"/v1/chat/completions|/v1/models|/v1/health\"}[5m])) by (le, http_target))", "legendFormat": "{{http_target}} p95" }
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",service=\"otel-collector-collector\",http_target=~\"/v1/chat/completions|/v1/models|/v1/health\"}[5m])) by (le, http_target)) * 1000", "legendFormat": "{{http_target}} p95" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Active Requests & Error Rate",
+          "title": "OGX — Active Requests & Error Rate",
           "description": "In-flight HTTP requests and non-2xx responses per second",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "http_server_active_requests{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "active requests" },
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_status_code!~\"2..\"}[5m]))", "legendFormat": "errors/s" }
+            { "expr": "ogx_concurrent_requests{service_name=\"ogx\",service=\"otel-collector-collector\"}", "legendFormat": "active requests" },
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",service=\"otel-collector-collector\",http_status_code!~\"2..\"}[5m]))", "legendFormat": "errors/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Request & Response Sizes (p95)",
+          "title": "OGX — Request & Response Sizes (p95)",
           "description": "95th percentile HTTP request and response body sizes",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_request_size_bytes_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "request body p95" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_response_size_bytes_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "response body p95" }
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_inference_tokens_per_second_bucket{service_name=\"ogx\"}[5m])) by (le))", "legendFormat": "tokens/s p95" },
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_inference_tokens_per_second_bucket{service_name=\"ogx\"}[5m])) by (le))", "legendFormat": "tokens/s p50" }
           ],
-          "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
           "title": "vLLM — Engine Latency (p50 / p95)",
@@ -1274,12 +1274,12 @@ data:
         },
         {
           "title": "PostgreSQL — Async DB Coroutine Rate",
-          "description": "Rate of key database-touching async operations from Llama Stack — store_chat_completion, try_connect, close",
+          "description": "Rate of key database-touching async operations from OGX — store_chat_completion, try_connect, close",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 35 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",name=~\"store_chat.*|try_connect|close\"}[5m])) by (name)", "legendFormat": "{{name}}/s" }
+            { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
         },
@@ -1290,48 +1290,48 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — Container CPU Usage",
-          "description": "CPU cores consumed by Llama Stack containers — sustained high usage indicates the API layer is CPU-bound",
+          "title": "OGX — Container CPU Usage",
+          "description": "CPU cores consumed by OGX containers — sustained high usage indicates the API layer is CPU-bound",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 0, "y": 43 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}}" }
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Container Memory",
-          "description": "Working set memory of Llama Stack containers — watch for growth over time (memory leaks)",
+          "title": "OGX — Container Memory",
+          "description": "Working set memory of OGX containers — watch for growth over time (memory leaks)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 8, "y": 43 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}) by (pod)", "legendFormat": "{{pod}}" }
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}) by (pod)", "legendFormat": "{{pod}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Container Restarts & Throttling",
+          "title": "OGX — Container Restarts & Throttling",
           "description": "Container restart count and CFS throttling — sustained throttling indicates CPU limits too low",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 43 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\"}) by (pod)", "legendFormat": "{{pod}} restarts" },
-            { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
+            { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"ogx.*\"}) by (pod)", "legendFormat": "{{pod}} restarts" },
+            { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — OTel Spans Created",
-          "description": "Rate of OTel spans started — indicates the tracing activity level of the Llama Stack process",
+          "title": "OGX — OTel Spans Created",
+          "description": "Rate of OTel spans started — indicates the tracing activity level of the OGX process",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 50 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(otel_sdk_span_started_total{service_name=\"llama-stack\"}[5m]))", "legendFormat": "spans started/s" },
-            { "expr": "otel_sdk_span_live{service_name=\"llama-stack\"}", "legendFormat": "live spans" }
+            { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" },
+            { "expr": "ogx_concurrent_requests{service_name=\"ogx\"}", "legendFormat": "concurrent requests" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
@@ -1354,25 +1354,25 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — Asyncio Coroutine Rate",
-          "description": "Rate of asyncio coroutines created (key async operations in Llama Stack)",
+          "title": "OGX — Asyncio Coroutine Rate",
+          "description": "Rate of asyncio coroutines created (key async operations in OGX)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 58 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (name)", "legendFormat": "{{name}}" }
+            { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Asyncio Coroutine Duration (p50 / p95)",
+          "title": "OGX — Asyncio Coroutine Duration (p50 / p95)",
           "description": "Latency of key async operations — store_chat_completion, inference calls, DB connections",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 58 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(asyncio_process_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le, name))", "legendFormat": "{{name}} p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(asyncio_process_duration_seconds_bucket{service_name=\"llama-stack\"}[5m])) by (le, name))", "legendFormat": "{{name}} p95" }
+            { "expr": "histogram_quantile(0.50, sum(rate(asyncio_process_duration_seconds_bucket{service_name=\"ogx\"}[5m])) by (le, name))", "legendFormat": "{{name}} p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(asyncio_process_duration_seconds_bucket{service_name=\"ogx\"}[5m])) by (le, name))", "legendFormat": "{{name}} p95" }
           ],
           "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
         }
@@ -1390,7 +1390,7 @@ data:
         ]
       },
       "time": { "from": "now-1h", "to": "now" },
-      "title": "Llama Stack Deep Dive",
+      "title": "OGX Deep Dive",
       "uid": "llamastack-deep-dive"
     }
 CONFIGMAP_EOF
@@ -1418,30 +1418,30 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — End-to-End Response Latency (p50 / p95 / p99)",
+          "title": "OGX — End-to-End Response Latency (p50 / p95 / p99)",
           "description": "Total time from Responses API request to complete response — HTTP server-side latency including vLLM inference, DB writes, and tool orchestration",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p95" },
-            { "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p99" }
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p99" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Latency Breakdown vs vLLM Inference",
-          "description": "Decomposes total API latency into vLLM inference time and Llama Stack processing overhead. Overhead = total HTTP server − vLLM e2e.",
+          "title": "OGX — Latency Breakdown vs vLLM Inference",
+          "description": "Decomposes total API latency into vLLM inference time and OGX processing overhead. Overhead = total HTTP server − vLLM e2e.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "total API avg (ms)" },
+            { "expr": "sum(rate(ogx_request_duration_seconds_sum{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) * 1000", "legendFormat": "total API avg (ms)" },
             { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p50 (ms)" },
-            { "expr": "(sum(rate(http_server_duration_milliseconds_sum{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))) - (histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000)", "legendFormat": "LS overhead (ms)" }
+            { "expr": "(sum(rate(ogx_request_duration_seconds_sum{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) / sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))) * 1000 - (histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000)", "legendFormat": "OGX overhead (ms)" }
           ],
-          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [{ "matcher": { "id": "byName", "options": "LS overhead (ms)" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash" } }, { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }] }
+          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [{ "matcher": { "id": "byName", "options": "OGX overhead (ms)" }, "properties": [{ "id": "custom.lineStyle", "value": { "fill": "dash" } }, { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }] }
         },
         {
           "title": "vLLM Time to First Token (TTFT)",
@@ -1488,18 +1488,18 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — Request Rate",
+          "title": "OGX — Request Rate",
           "description": "Responses API requests per second — overall throughput capacity",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "requests/s" }
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "requests/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Token Throughput (vLLM engine)",
+          "title": "OGX — Token Throughput (vLLM engine)",
           "description": "Token processing rate at vLLM engine level — prompt (input) and generation (output) tokens per second",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
@@ -1511,7 +1511,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Avg Tokens per Request",
+          "title": "OGX — Avg Tokens per Request",
           "description": "Average prompt and generation tokens per request — computed from vLLM token counters and request success rate",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
@@ -1523,27 +1523,27 @@ data:
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — API Request/Response Payload Sizes (p95)",
+          "title": "OGX — API Request/Response Payload Sizes (p95)",
           "description": "95th percentile HTTP body sizes — useful for capacity planning and network bandwidth evaluation",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_request_size_bytes_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "request body p95" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_response_size_bytes_bucket{service_name=\"llama-stack\",service=\"otel-collector-collector\"}[5m])) by (le))", "legendFormat": "response body p95" }
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_inference_tokens_per_second_bucket{service_name=\"ogx\"}[5m])) by (le))", "legendFormat": "tokens/s p95" },
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_inference_tokens_per_second_bucket{service_name=\"ogx\"}[5m])) by (le))", "legendFormat": "tokens/s p50" }
           ],
-          "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Error Rate & Active Requests",
+          "title": "OGX — Error Rate & Active Requests",
           "description": "Non-2xx error rate and concurrent in-flight requests — key for reliability and saturation assessment",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "http_server_active_requests{service_name=\"llama-stack\",service=\"otel-collector-collector\"}", "legendFormat": "active requests" },
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_status_code!~\"2..\"}[5m]))", "legendFormat": "errors/s (non-2xx)" },
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",service=\"otel-collector-collector\",http_status_code=~\"2..\"}[5m]))", "legendFormat": "success/s (2xx)" }
+            { "expr": "ogx_concurrent_requests{service_name=\"ogx\",service=\"otel-collector-collector\"}", "legendFormat": "active requests" },
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",service=\"otel-collector-collector\",http_status_code!~\"2..\"}[5m]))", "legendFormat": "errors/s (non-2xx)" },
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",service=\"otel-collector-collector\",http_status_code=~\"2..\"}[5m]))", "legendFormat": "success/s (2xx)" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [{ "matcher": { "id": "byName", "options": "errors/s (non-2xx)" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }] }
         },
@@ -1555,7 +1555,7 @@ data:
         },
         {
           "title": "vLLM Request Latency (p50 / p95 / p99)",
-          "description": "Raw vLLM inference latency — no Llama Stack overhead. Compare with end-to-end to isolate bottlenecks.",
+          "description": "Raw vLLM inference latency — no OGX overhead. Compare with end-to-end to isolate bottlenecks.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 35 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
@@ -1710,14 +1710,14 @@ data:
           "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":1},{"color":"red","value":3}] } }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Async DB Coroutine Rate",
+          "title": "OGX — Async DB Coroutine Rate",
           "description": "Rate of key database-touching async operations — store_chat_completion writes conversation state per response",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 6, "x": 18, "y": 68 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",service=\"otel-collector-collector\",name=\"store_chat_completion\"}[5m]))", "legendFormat": "store_chat_completion/s" },
-            { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",service=\"otel-collector-collector\",name=\"close\"}[5m]))", "legendFormat": "conn close/s" }
+            { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" },
+            { "expr": "ogx_concurrent_requests{service_name=\"ogx\"}", "legendFormat": "concurrent requests" }
           ],
           "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
         },
@@ -1728,36 +1728,36 @@ data:
           "collapsed": false
         },
         {
-          "title": "Llama Stack — Container CPU",
-          "description": "CPU cores consumed by Llama Stack containers — should stay low; sustained high usage indicates API layer is CPU-bound",
+          "title": "OGX — Container CPU",
+          "description": "CPU cores consumed by OGX containers — should stay low; sustained high usage indicates API layer is CPU-bound",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 0, "y": 77 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}} (cores)" }
+            { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}} (cores)" }
           ],
           "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Container Memory",
+          "title": "OGX — Container Memory",
           "description": "Working set memory — watch for growth over time (memory leaks under sustained load)",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 8, "y": 77 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}) by (pod)", "legendFormat": "{{pod}}" }
+            { "expr": "sum(container_memory_working_set_bytes{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}) by (pod)", "legendFormat": "{{pod}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
         },
         {
-          "title": "Llama Stack — Container Restarts & CPU Throttling",
+          "title": "OGX — Container Restarts & CPU Throttling",
           "description": "Container restarts and CFS throttle percentage — sustained throttling means CPU limits are too low",
           "type": "timeseries",
           "gridPos": { "h": 7, "w": 8, "x": 16, "y": 77 },
           "datasource": { "type": "prometheus", "uid": "${DS_OPENSHIFT_PROMETHEUS}" },
           "targets": [
-            { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\"}) by (pod)", "legendFormat": "{{pod}} restarts" },
-            { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
+            { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"ogx.*\"}) by (pod)", "legendFormat": "{{pod}} restarts" },
+            { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
           ],
           "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
         },
@@ -1820,7 +1820,7 @@ data:
           "title": "── TRACE SEARCH ─────────────────────────────",
           "type": "text",
           "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
-          "options": { "mode": "markdown", "content": "Search and explore distributed traces from **Llama Stack** and **vLLM**. Traces are collected via the **OTel Collector** and exposed as Prometheus metrics." }
+          "options": { "mode": "markdown", "content": "Search and explore distributed traces from **OGX** and **vLLM**. Traces are collected via the **OTel Collector** and exposed as Prometheus metrics." }
         },
         {
           "title": "OTel Span Rate by Service",
@@ -1828,19 +1828,19 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 2 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(rate(otel_sdk_span_started_total[5m])) by (service_name)", "legendFormat": "{{service_name}}" },
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name!=\"\"}[5m])) by (service_name)", "legendFormat": "{{service_name}} req/s" }
+            { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "ogx requests/s" },
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name!=\"\"}[5m])) by (service_name)", "legendFormat": "{{service_name}} req/s" }
           ],
           "fieldConfig": { "defaults": { "unit": "ops" } }
         },
         {
-          "title": "Llama Stack vs vLLM Latency (p50 / p95)",
+          "title": "OGX vs vLLM Latency (p50 / p95)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 2 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "LS HTTP server p50 (ms)" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "LS HTTP server p95 (ms)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "OGX HTTP server p50 (ms)" },
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "OGX HTTP server p95 (ms)" },
             { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p50 (ms)" },
             { "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p95 (ms)" }
           ],
@@ -1850,15 +1850,15 @@ data:
           "title": "── HOW TO EXPLORE TRACES ─────────────────────",
           "type": "text",
           "gridPos": { "h": 6, "w": 24, "x": 0, "y": 10 },
-          "options": { "mode": "markdown", "content": "### Trace Metrics in Grafana\\n\\nTraces are collected by the **OTel Collector** and exported as Prometheus metrics.\\n\\n**Key Prometheus trace metrics:**\\n- `http_server_duration_milliseconds` — HTTP server request latency\\n- `vllm:e2e_request_latency_seconds` — vLLM inference latency\\n- `otel_sdk_span_started_total` — OTel span creation rate\\n- `asyncio_process_created_total` — Async operation rates\\n\\n**Tips:**\\n- Use the Llama Stack Deep Dive dashboard for per-operation trace-derived metrics\\n- Filter by `service_name=\\\"llama-stack\\\"` for Llama Stack metrics\\n- Compare `http_server_duration_milliseconds` vs `vllm:e2e_request_latency` to measure orchestration overhead" }
+          "options": { "mode": "markdown", "content": "### OGX Metrics in Grafana\\n\\nMetrics are collected by the **OTel Collector** and exported to Prometheus.\\n\\n**Key Prometheus metrics:**\\n- `ogx_request_duration_seconds` — OGX request latency\\n- `ogx_inference_duration_seconds` — OGX inference backend latency\\n- `ogx_requests_total` — OGX request count\\n- `ogx_concurrent_requests` — Active concurrent requests\\n- `ogx_inference_tokens_per_second` — Token throughput\\n\\n**Tips:**\\n- Use the OGX Deep Dive dashboard for per-operation metrics\\n- Filter by `service_name=\\\"ogx\\\"` for OGX metrics\\n- Compare `ogx_request_duration_seconds` vs `vllm:e2e_request_latency_seconds` to measure orchestration overhead" }
         },
         {
-          "title": "Llama Stack HTTP Latency vs vLLM Engine Latency (overhead)",
+          "title": "OGX HTTP Latency vs vLLM Engine Latency (overhead)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "LS HTTP server p50 (ms)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "OGX HTTP server p50 (ms)" },
             { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "vLLM e2e p50 (ms)" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
@@ -1869,7 +1869,7 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" } }
         },
@@ -1890,9 +1890,9 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",name=\"store_chat_completion\"}[5m]))", "legendFormat": "store_chat_completion/s" },
-            { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",name=\"try_connect\"}[5m]))", "legendFormat": "DB try_connect/s" },
-            { "expr": "otel_sdk_span_live{service_name=\"llama-stack\"}", "legendFormat": "live spans" }
+            { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" },
+            { "expr": "ogx_concurrent_requests{service_name=\"ogx\"}", "legendFormat": "concurrent requests" },
+            { "expr": "sum(rate(vllm:request_success_total[5m]))", "legendFormat": "vLLM success/s" }
           ]
         }
       ],
@@ -1929,7 +1929,7 @@ data:
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
           "datasource": { "uid": "prometheus" },
-          "targets": [{ "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "" }],
+          "targets": [{ "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m]))", "legendFormat": "" }],
           "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":5},{"color":"red","value":20}] } } }
         },
         {
@@ -1937,7 +1937,7 @@ data:
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
           "datasource": { "uid": "prometheus" },
-          "targets": [{ "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "" }],
+          "targets": [{ "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "" }],
           "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":2000},{"color":"red","value":5000}] } } }
         },
         {
@@ -1945,7 +1945,7 @@ data:
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
           "datasource": { "uid": "prometheus" },
-          "targets": [{ "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_status_code!~\"2..\"}[5m])) or vector(0)", "legendFormat": "" }],
+          "targets": [{ "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_status_code!~\"2..\"}[5m])) or vector(0)", "legendFormat": "" }],
           "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":0.1},{"color":"red","value":1}] } } }
         },
         {
@@ -1953,7 +1953,7 @@ data:
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
           "datasource": { "uid": "prometheus" },
-          "targets": [{ "expr": "http_server_active_requests{service_name=\"llama-stack\"}", "legendFormat": "" }],
+          "targets": [{ "expr": "ogx_concurrent_requests{service_name=\"ogx\"}", "legendFormat": "" }],
           "fieldConfig": { "defaults": { "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":10},{"color":"red","value":25}] } } }
         },
         {
@@ -1984,21 +1984,21 @@ data:
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p50" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p95" },
-            { "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p99" }
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p99" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
         },
         {
-          "title": "Latency Breakdown: Llama Stack Overhead vs Inference",
+          "title": "Latency Breakdown: OGX Overhead vs Inference",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "total (HTTP server p50)" },
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "total (HTTP server p50)" },
             { "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "inference (vLLM e2e p50)" },
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) - histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "overhead (LS processing)" }
+            { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000 - histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "overhead (OGX processing)" }
           ],
           "fieldConfig": { "defaults": { "unit": "ms" } }
         },
@@ -2008,7 +2008,7 @@ data:
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
           "datasource": { "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
+            { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\",http_target!=\"\"}[5m])) by (http_target)", "legendFormat": "{{http_target}}" }
           ],
           "fieldConfig": { "defaults": { "unit": "reqps" } }
         },
@@ -2115,14 +2115,14 @@ data:
               ]
             },
             {
-              "title": "Llama Stack API Latency (p50/p95/p99)",
+              "title": "OGX API Latency (p50/p95/p99)",
               "type": "timeseries",
               "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p50" },
-                { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p95" },
-                { "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le))", "legendFormat": "p99" }
+                { "expr": "histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p50" },
+                { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p95" },
+                { "expr": "histogram_quantile(0.99, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target=~\"/v1/chat.*|/v1/responses.*\"}[5m])) by (le)) * 1000", "legendFormat": "p99" }
               ],
               "fieldConfig": { "defaults": { "unit": "ms" } }
             }
@@ -2140,7 +2140,7 @@ data:
               "gridPos": { "h": 8, "w": 8, "x": 0, "y": 17 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\"}[5m])) by (name)", "legendFormat": "{{name}}" }
+                { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" }
               ],
               "fieldConfig": { "defaults": { "unit": "ops" } }
             },
@@ -2150,10 +2150,10 @@ data:
               "gridPos": { "h": 8, "w": 8, "x": 8, "y": 17 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "histogram_quantile(0.95, sum(rate(http_server_request_size_bytes_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "request p95" },
-                { "expr": "histogram_quantile(0.95, sum(rate(http_server_response_size_bytes_bucket{service_name=\"llama-stack\"}[5m])) by (le))", "legendFormat": "response p95" }
+                { "expr": "histogram_quantile(0.95, sum(rate(ogx_inference_tokens_per_second_bucket{service_name=\"ogx\"}[5m])) by (le))", "legendFormat": "tokens/s p95" },
+                { "expr": "histogram_quantile(0.50, sum(rate(ogx_inference_tokens_per_second_bucket{service_name=\"ogx\"}[5m])) by (le))", "legendFormat": "tokens/s p50" }
               ],
-              "fieldConfig": { "defaults": { "unit": "bytes" } }
+              "fieldConfig": { "defaults": { "unit": "short" } }
             },
             {
               "title": "HTTP Status Codes",
@@ -2161,7 +2161,7 @@ data:
               "gridPos": { "h": 8, "w": 8, "x": 16, "y": 17 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "sum(rate(http_server_duration_milliseconds_count{service_name=\"llama-stack\"}[5m])) by (http_status_code)", "legendFormat": "{{http_status_code}}" }
+                { "expr": "sum(rate(ogx_request_duration_seconds_count{service_name=\"ogx\"}[5m])) by (http_status_code)", "legendFormat": "{{http_status_code}}" }
               ],
               "fieldConfig": { "defaults": { "unit": "reqps" } }
             },
@@ -2169,7 +2169,7 @@ data:
               "title": "── Future: Tool Call Metrics",
               "type": "text",
               "gridPos": { "h": 4, "w": 24, "x": 0, "y": 25 },
-              "options": { "mode": "markdown", "content": "**Agent tool call metrics will appear here** when Llama Stack exposes them via OTel.\\nExpected metrics: tool call count by type, tool execution latency, multi-turn depth, routing decisions.\\n\\nMonitor `asyncio_process_created_total{name=~\\\".*tool.*|.*agent.*\\\"}` for early signals." }
+              "options": { "mode": "markdown", "content": "**Agent tool call metrics will appear here** when OGX exposes them via OTel.\\nExpected metrics: tool call count by type, tool execution latency, multi-turn depth, routing decisions.\\n\\nMonitor `ogx_requests_total{service_name=\\\"ogx\\\"}` for request activity signals." }
             }
           ]
         },
@@ -2195,7 +2195,7 @@ data:
               "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\",name=~\"store_chat.*|try_connect\"}[5m])) by (name)", "legendFormat": "{{name}}" }
+                { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" }
               ],
               "fieldConfig": { "defaults": { "unit": "ops" } }
             },
@@ -2230,7 +2230,7 @@ data:
               "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{service_name=\"llama-stack\",http_target!=\"\"}[5m])) by (le, http_target))", "legendFormat": "{{http_target}}" }
+                { "expr": "histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{service_name=\"ogx\",http_target!=\"\"}[5m])) by (le, http_target)) * 1000", "legendFormat": "{{http_target}}" }
               ],
               "fieldConfig": { "defaults": { "unit": "ms" } }
             },
@@ -2329,14 +2329,14 @@ data:
               "fieldConfig": { "defaults": { "unit": "bytes" } }
             },
             {
-              "title": "Llama Stack Container Health",
+              "title": "OGX Container Health",
               "type": "timeseries",
               "gridPos": { "h": 8, "w": 8, "x": 16, "y": 21 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m]))", "legendFormat": "CPU (cores)" },
-                { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\"})", "legendFormat": "restarts" },
-                { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"llama-stack.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
+                { "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m]))", "legendFormat": "CPU (cores)" },
+                { "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"perf-testing\",pod=~\"ogx.*\"})", "legendFormat": "restarts" },
+                { "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"perf-testing\",pod=~\"ogx.*\",container!=\"\"}[5m])) * 100", "legendFormat": "CPU throttle %" }
               ]
             },
             {
@@ -2367,7 +2367,7 @@ data:
               "title": "Trace Exploration Guide",
               "type": "text",
               "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
-              "options": { "mode": "markdown", "content": "### Distributed Traces (OTel → Prometheus)\\n\\nTrace-derived metrics are available via Prometheus:\\n\\n| Metric | What It Shows |\\n|---|---|\\n| `http_server_duration_milliseconds` | HTTP request latency |\\n| `vllm:e2e_request_latency_seconds` | vLLM inference latency |\\n| `otel_sdk_span_started_total` | OTel span creation rate |\\n| `asyncio_process_created_total` | Async operation rates |\\n\\nLlama Stack overhead = LS HTTP server time − vLLM e2e time" }
+              "options": { "mode": "markdown", "content": "### OGX Metrics (OTel → Prometheus)\\n\\nOGX-native metrics are available via Prometheus:\\n\\n| Metric | What It Shows |\\n|---|---|\\n| `ogx_request_duration_seconds` | OGX request latency |\\n| `ogx_inference_duration_seconds` | Inference backend latency |\\n| `ogx_requests_total` | Request count |\\n| `ogx_concurrent_requests` | Active concurrent requests |\\n| `ogx_inference_tokens_per_second` | Token throughput |\\n\\nOGX overhead = OGX request time − vLLM e2e time" }
             },
             {
               "title": "Asyncio Operations & OTel Spans",
@@ -2375,9 +2375,9 @@ data:
               "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
               "datasource": { "uid": "prometheus" },
               "targets": [
-                { "expr": "sum(rate(asyncio_process_created_total{service_name=\"llama-stack\"}[5m])) by (name)", "legendFormat": "{{name}}" },
-                { "expr": "sum(rate(otel_sdk_span_started_total{service_name=\"llama-stack\"}[5m]))", "legendFormat": "OTel spans/s" },
-                { "expr": "otel_sdk_span_live{service_name=\"llama-stack\"}", "legendFormat": "live spans" }
+                { "expr": "sum(rate(ogx_requests_total{service_name=\"ogx\"}[5m]))", "legendFormat": "requests/s" },
+                { "expr": "ogx_concurrent_requests{service_name=\"ogx\"}", "legendFormat": "concurrent requests" },
+                { "expr": "sum(rate(vllm:request_success_total[5m]))", "legendFormat": "vLLM success/s" }
               ]
             }
           ]
@@ -2405,7 +2405,7 @@ data:
     }
 CONFIGMAP_EOF
 
-ok "8 dashboards created (OCP, GPU, LLM, Perf Eval, Llama Stack Deep Dive, Responses API Eval, Distributed Traces, Perf Engineering Eval)"
+ok "8 dashboards created (OCP, GPU, LLM, Perf Eval, OGX Deep Dive, Responses API Eval, Distributed Traces, Perf Engineering Eval)"
 
 # ── 9. Per-Process Resource Utilization (by node role) ─────────────────────
 info "Creating Per-Process Instance Resource Utilization dashboard..."
@@ -3110,7 +3110,7 @@ spec:
     spec:
       serviceAccountName: ${GRAFANA_SA}
       nodeSelector:
-        node-role.kubernetes.io/perf-test: ""
+        node-role.kubernetes.io/loadgen-worker: ""
       containers:
       - name: grafana
         image: docker.io/grafana/grafana:11.4.0
@@ -3262,14 +3262,14 @@ echo ""
 info "Dashboards:"
 info "  1. OCP Cluster Overview     — CPU, memory, network, pods"
 info "  2. GPU Metrics (DCGM)       — utilization, memory, temp, power"
-info "  3. LLM Inference            — vLLM + Llama Stack metrics, latency, tokens"
+info "  3. LLM Inference            — vLLM + OGX metrics, latency, tokens"
 info "  4. Performance Evaluation   — AI Stack → GPU → Per-Instance (combined)"
-info "  5. Llama Stack Deep Dive    — GenAI, HTTP API, DB pool, process health"
+info "  5. OGX Deep Dive    — GenAI, HTTP API, DB pool, process health"
 info "  6. Responses API Evaluation — latency breakdown, throughput, vLLM, GPU, DB, resources"
 info "  7. Distributed Traces     — trace metrics, overhead analysis, OTel Collector"
 info "  8. Perf Engineering Eval  — modular single-run evaluation, extensible for future components"
 echo ""
-info "  Trace metrics: OTel Collector exports to Prometheus (filter by service_name: llama-stack, vllm-inference)"
+info "  Trace metrics: OTel Collector exports to Prometheus (filter by service_name: ogx, vllm-inference)"
 echo ""
 info "To remove:  bash ./grafana-quickstart.sh teardown"
 echo "============================================"

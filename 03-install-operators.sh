@@ -505,7 +505,7 @@ done
 echo ""
 
 if [[ "$DSC_READY" == "true" ]]; then
-  info "Creating DataScienceCluster with Llama Stack, KServe, and dashboard..."
+  info "Creating DataScienceCluster with OGX (Llama Stack), KServe, and dashboard..."
   oc apply -f - <<EOF
 apiVersion: datasciencecluster.opendatahub.io/v1
 kind: DataScienceCluster
@@ -520,6 +520,8 @@ spec:
       serving:
         managementState: Managed
     llamastackoperator:
+      managementState: Removed
+    ogx:
       managementState: Managed
     workbenches:
       managementState: Removed
@@ -541,8 +543,9 @@ spec:
       managementState: Removed
 EOF
 
-  ok "DataScienceCluster created — RHOAI components deploying"
-  info "Monitor: oc get datasciencecluster default-dsc -o jsonpath='{.status.phase}'"
+  ok "DataScienceCluster created — RHOAI components deploying (OGX is operator-managed)"
+  info "Monitor DSC: oc get datasciencecluster default-dsc -o jsonpath='{.status.phase}'"
+  info "Monitor OGX: oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=ogx-k8s-operator"
 else
   warn "DataScienceCluster CRD did not appear. RHOAI operator may have failed to install."
   warn "Check: oc get subscription rhods-operator -n redhat-ods-operator -o yaml"

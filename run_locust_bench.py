@@ -6,8 +6,10 @@ sys.path.insert(0, "/tmp/pylib/lib/python3.11/site-packages")
 
 import numpy as np
 
-LLAMA_STACK_URL = "http://llama-stack:8321"
-MODEL = "vllm-inference/Qwen/Qwen2.5-7B-Instruct"
+LLAMA_STACK_URL = os.environ.get(
+    "LLAMA_STACK_URL", "http://ogx-server-service:8321"
+)
+MODEL = os.environ.get("MODEL_ID", "simulator")
 
 LOCUSTFILE = "/tmp/locustfile_llama.py"
 
@@ -18,7 +20,7 @@ import sys
 sys.path.insert(0, "/tmp/pylib/lib/python3.11/site-packages")
 from locust import HttpUser, task, between, events
 
-MODEL = "vllm-inference/Qwen/Qwen2.5-7B-Instruct"
+MODEL = os.environ.get("MODEL_ID", "simulator")
 
 PROMPTS = [
     "Explain the concept of quantum entanglement in simple terms.",

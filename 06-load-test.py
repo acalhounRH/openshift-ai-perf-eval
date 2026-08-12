@@ -296,31 +296,31 @@ class ScaleMetrics:
 
 def rate_metrics(ns: str) -> dict[str, str]:
     return {
-        # Llama Stack HTTP server
-        "ls_http_p50_ms": 'histogram_quantile(0.50, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-        "ls_http_p95_ms": 'histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-        "ls_http_p99_ms": 'histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        # OGX request duration (seconds → ms)
+        "ogx_req_p50_ms": 'histogram_quantile(0.50, sum(rate(ogx_request_duration_seconds_bucket{{service_name="ogx"}}[{window}])) by (le)) * 1000',
+        "ogx_req_p95_ms": 'histogram_quantile(0.95, sum(rate(ogx_request_duration_seconds_bucket{{service_name="ogx"}}[{window}])) by (le)) * 1000',
+        "ogx_req_p99_ms": 'histogram_quantile(0.99, sum(rate(ogx_request_duration_seconds_bucket{{service_name="ogx"}}[{window}])) by (le)) * 1000',
 
-        # Llama Stack HTTP client (LS → vLLM)
-        "ls_client_p50_ms": 'histogram_quantile(0.50, sum(rate(http_client_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-        "ls_client_p95_ms": 'histogram_quantile(0.95, sum(rate(http_client_duration_milliseconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        # OGX inference duration (seconds → ms)
+        "ogx_inf_p50_ms": 'histogram_quantile(0.50, sum(rate(ogx_inference_duration_seconds_bucket{{service_name="ogx"}}[{window}])) by (le)) * 1000',
+        "ogx_inf_p95_ms": 'histogram_quantile(0.95, sum(rate(ogx_inference_duration_seconds_bucket{{service_name="ogx"}}[{window}])) by (le)) * 1000',
 
         # Llama Stack: token throughput
-        "ls_tok_in_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="llama-stack",gen_ai_token_type="input"}}[{window}]))',
-        "ls_tok_out_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="llama-stack",gen_ai_token_type="output"}}[{window}]))',
+        "ls_tok_in_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="ogx",gen_ai_token_type="input"}}[{window}]))',
+        "ls_tok_out_s": 'sum(rate(gen_ai_client_token_usage_sum{{service_name="ogx",gen_ai_token_type="output"}}[{window}]))',
 
         # Llama Stack: async operations
-        "ls_async_store_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="store_chat_completion"}}[{window}]))',
-        "ls_async_connect_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="try_connect"}}[{window}]))',
-        "ls_async_close_s": 'sum(rate(asyncio_process_created_total{{service_name="llama-stack",name="close"}}[{window}]))',
+        "ls_async_store_s": 'sum(rate(asyncio_process_created_total{{service_name="ogx",name="store_chat_completion"}}[{window}]))',
+        "ls_async_connect_s": 'sum(rate(asyncio_process_created_total{{service_name="ogx",name="try_connect"}}[{window}]))',
+        "ls_async_close_s": 'sum(rate(asyncio_process_created_total{{service_name="ogx",name="close"}}[{window}]))',
 
         # Llama Stack: payload sizes
-        "ls_req_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_request_size_bytes_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-        "ls_resp_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_response_size_bytes_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        "ls_req_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_request_size_bytes_bucket{{service_name="ogx"}}[{window}])) by (le))',
+        "ls_resp_size_p50": 'histogram_quantile(0.50, sum(rate(http_server_response_size_bytes_bucket{{service_name="ogx"}}[{window}])) by (le))',
 
         # GenAI operation duration
-        "genai_dur_p50_s": 'histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
-        "genai_dur_p95_s": 'histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="llama-stack"}}[{window}])) by (le))',
+        "genai_dur_p50_s": 'histogram_quantile(0.50, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="ogx"}}[{window}])) by (le))',
+        "genai_dur_p95_s": 'histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_seconds_bucket{{service_name="ogx"}}[{window}])) by (le))',
 
         # vLLM engine
         "_vllm_ttft_s": 'histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket[{window}])) by (le))',
@@ -331,13 +331,13 @@ def rate_metrics(ns: str) -> dict[str, str]:
 
         # Process CPU (rate-based)
         "vllm_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"vllm.*",container!=""}}}}[{{window}}]))',
-        "ls_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"llama-stack.*",container!=""}}}}[{{window}}]))',
+        "ls_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"ogx.*",container!=""}}}}[{{window}}]))',
         "pg_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"postgresql.*",container!=""}}}}[{{window}}]))',
         "otel_pod_cpu": f'sum(rate(container_cpu_usage_seconds_total{{{{namespace="{ns}",pod=~"otel.*",container!=""}}}}[{{window}}]))',
 
         # Node CPU (rate-based)
-        "node_app_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_app_worker=""}},"instance","$1","node","(.+)"))',
-        "node_inference_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_inference_worker=""}},"instance","$1","node","(.+)"))',
+        "node_app_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_ogx_worker=""}},"instance","$1","node","(.+)"))',
+        "node_inference_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_postgres_worker=""}},"instance","$1","node","(.+)"))',
         "node_loadgen_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_loadgen_worker=""}},"instance","$1","node","(.+)"))',
         "node_cp_cpu_pct": '100 * avg(1 - rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) * on(instance) group_left() label_replace(kube_node_labels{{label_node_role_kubernetes_io_master=""}},"instance","$1","node","(.+)"))',
     }
@@ -346,12 +346,12 @@ def rate_metrics(ns: str) -> dict[str, str]:
 def gauge_metrics(ns: str) -> dict[str, str]:
     return {
         # Llama Stack: gauges (point-in-time, take max during level)
-        "ls_active_reqs": 'http_server_active_requests{service_name="llama-stack"}',
-        "ls_db_used": 'db_client_connections_usage{service_name="llama-stack",state="used"}',
-        "ls_db_idle": 'db_client_connections_usage{service_name="llama-stack",state="idle"}',
-        "ls_cpu_ratio": 'process_cpu_utilization_ratio{service_name="llama-stack"}',
-        "ls_threads": 'process_thread_count{service_name="llama-stack"}',
-        "ls_fds": 'process_open_file_descriptor_count{service_name="llama-stack"}',
+        "ogx_concurrent_reqs": 'ogx_concurrent_requests{service_name="ogx"}',
+        "ls_db_used": 'db_client_connections_usage{service_name="ogx",state="used"}',
+        "ls_db_idle": 'db_client_connections_usage{service_name="ogx",state="idle"}',
+        "ls_cpu_ratio": 'process_cpu_utilization_ratio{service_name="ogx"}',
+        "ls_threads": 'process_thread_count{service_name="ogx"}',
+        "ls_fds": 'process_open_file_descriptor_count{service_name="ogx"}',
 
         # vLLM gauges
         "vllm_kv_cache_pct": 'vllm:gpu_cache_usage_perc * 100',
@@ -366,13 +366,13 @@ def gauge_metrics(ns: str) -> dict[str, str]:
 
         # Memory gauges (point-in-time)
         "vllm_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"vllm.*",container!=""}}) / 1048576',
-        "ls_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"llama-stack.*",container!=""}}) / 1048576',
+        "ls_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"ogx.*",container!=""}}) / 1048576',
         "pg_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"postgresql.*",container!=""}}) / 1048576',
         "otel_pod_mem_mb": f'sum(container_memory_working_set_bytes{{namespace="{ns}",pod=~"otel.*",container!=""}}) / 1048576',
 
         # Node memory gauges
-        "node_app_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_app_worker=""},"instance","$1","node","(.+)"))',
-        "node_inference_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_inference_worker=""},"instance","$1","node","(.+)"))',
+        "node_app_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_ogx_worker=""},"instance","$1","node","(.+)"))',
+        "node_inference_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_postgres_worker=""},"instance","$1","node","(.+)"))',
         "node_loadgen_mem_pct": '100 * avg(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left() label_replace(kube_node_labels{label_node_role_kubernetes_io_loadgen_worker=""},"instance","$1","node","(.+)"))',
     }
 
@@ -595,7 +595,7 @@ def print_scaling_report(results: list[ScaleMetrics], csv_path: str):
     print("  INSTANCE (NODE) UTILIZATION BY ROLE")
     print("═" * 120)
     print()
-    print(f"{'Conc':>5} │ {'App Worker':>18} │ {'Inference Worker':>18} │ {'Loadgen Worker':>18} │ {'Ctrl Plane':>12}")
+    print(f"{'Conc':>5} │ {'OGX Worker':>18} │ {'Postgres Worker':>18} │ {'Loadgen Worker':>18} │ {'Ctrl Plane':>12}")
     print(f"{'':>5} │ {'CPU%':>8} {'Mem%':>9} │ {'CPU%':>8} {'Mem%':>9} │ {'CPU%':>8} {'Mem%':>9} │ {'CPU%':>12}")
     print("─" * 100)
     for m in results:
@@ -738,8 +738,8 @@ def print_scaling_report(results: list[ScaleMetrics], csv_path: str):
     # Node utilization
     print("\n── Node Utilization ──")
     for cpu_attr, mem_attr, name in [
-        ("node_app_cpu_pct", "node_app_mem_pct", "App Worker"),
-        ("node_inference_cpu_pct", "node_inference_mem_pct", "Inference Worker"),
+        ("node_app_cpu_pct", "node_app_mem_pct", "OGX Worker"),
+        ("node_inference_cpu_pct", "node_inference_mem_pct", "Postgres Worker"),
         ("node_loadgen_cpu_pct", "node_loadgen_mem_pct", "Loadgen Worker"),
     ]:
         cv = [(m.concurrency, safe(getattr(m, cpu_attr))) for m in results]
@@ -979,7 +979,7 @@ def main():
         mode = "default"
 
     namespace = os.environ.get("PERF_NAMESPACE", "perf-testing")
-    llama_stack_url = os.environ.get("LLAMA_STACK_URL", "http://llama-stack:8321")
+    llama_stack_url = os.environ.get("LLAMA_STACK_URL", "http://ogx-server-service:8321")
 
     # Discover model via direct HTTP
     info(f"Discovering model from {llama_stack_url}...")

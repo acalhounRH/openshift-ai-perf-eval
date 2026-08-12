@@ -36,24 +36,44 @@ spec:
     node-role.kubernetes.io/loadgen-worker: ""
   containers:
   - name: bench
-    image: ${BENCHMARK_RUNNER_IMAGE}
+    image: ${GUIDELLM_IMAGE}
     command: ["sleep", "infinity"]
     env:
     - name: LLAMA_STACK_URL
-      value: "http://llama-stack:8321"
+      value: "${LLAMA_STACK_URL}"
     - name: VLLM_URL
       value: "http://vllm-inference:8000"
     - name: MODEL_ID
       value: "${MODEL_ID}"
     - name: PERF_NAMESPACE
       value: "${PERF_NAMESPACE}"
+    - name: MLFLOW_TRACKING_URI
+      value: "${MLFLOW_TRACKING_URI}"
+    - name: MLFLOW_TRACKING_USERNAME
+      value: "${MLFLOW_TRACKING_USERNAME}"
+    - name: MLFLOW_TRACKING_PASSWORD
+      value: "${MLFLOW_TRACKING_PASSWORD}"
+    - name: MLFLOW_WORKSPACE
+      value: "${MLFLOW_WORKSPACE}"
+    - name: OPENBLAS_NUM_THREADS
+      value: "1"
+    - name: HF_HOME
+      value: "/tmp/hf_cache"
+    - name: TRANSFORMERS_CACHE
+      value: "/tmp/hf_cache"
+    - name: GIT_PYTHON_REFRESH
+      value: "quiet"
+    - name: PYTHONPATH
+      value: "/tmp/guidellm-upgrade:/tmp/pylib"
+    - name: PATH
+      value: "/tmp/guidellm-upgrade/bin:/opt/guidellm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     resources:
       requests:
-        cpu: "${BENCHMARK_RUNNER_CPU_REQUEST}"
-        memory: "${BENCHMARK_RUNNER_MEM_REQUEST}"
+        cpu: "${GUIDELLM_CPU_REQUEST}"
+        memory: "${GUIDELLM_MEM_REQUEST}"
       limits:
-        cpu: "${BENCHMARK_RUNNER_CPU_LIMIT}"
-        memory: "${BENCHMARK_RUNNER_MEM_LIMIT}"
+        cpu: "${GUIDELLM_CPU_LIMIT}"
+        memory: "${GUIDELLM_MEM_LIMIT}"
     volumeMounts:
     - name: results
       mountPath: /results
@@ -80,18 +100,20 @@ ok "benchmark-runner pod deployed"
 info "Installing benchmark tools in the pod (this takes 1-2 minutes)..."
 
 oc exec benchmark-runner -n "${PERF_NAMESPACE}" -- bash -c '
-  pip install --quiet --no-cache-dir \
-    vllm \
-    openai \
-    aiohttp \
-    locust \
-    llama-stack-client \
-    requests \
-    numpy \
-    2>&1 | tail -1
+  pip install --quiet --no-cache-dir --target=/tmp/pylib \
+    mlflow-skinny \
+    urllib3 \
+    2>&1 | tail -3
 '
+ok "MLflow + deps installed"
 
-ok "Benchmark tools installed"
+info "Upgrading GuideLLM to v0.7.1 (Responses API support)..."
+oc exec benchmark-runner -n "${PERF_NAMESPACE}" -- bash -c '
+  pip install --quiet --no-cache-dir --target=/tmp/guidellm-upgrade \
+    "guidellm[recommended]==0.7.1" \
+    2>&1 | tail -3
+'
+ok "GuideLLM v0.7.1 installed to /tmp/guidellm-upgrade"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 2b. GRANT MONITORING PERMISSIONS
@@ -113,6 +135,28 @@ else
   warn "06-load-test.py not found at ${LOAD_TEST_SCRIPT} — copy manually"
 fi
 
+GUIDELLM_SCRIPT="${SCRIPT_DIR}/run_guidellm_bench.py"
+if [[ -f "$GUIDELLM_SCRIPT" ]]; then
+  info "Copying run_guidellm_bench.py into the pod..."
+  oc cp "$GUIDELLM_SCRIPT" "${PERF_NAMESPACE}/benchmark-runner:/scripts/run_guidellm_bench.py"
+  ok "GuideLLM benchmark script copied to /scripts/run_guidellm_bench.py"
+else
+  warn "run_guidellm_bench.py not found at ${GUIDELLM_SCRIPT} — copy manually"
+fi
+
+info "Copying scripts/ modules into the pod..."
+oc exec benchmark-runner -n "${PERF_NAMESPACE}" -- mkdir -p /scripts/scripts
+
+for SCRIPT_FILE in log_guidellm_to_mlflow.py prom_collector.py; do
+  SRC="${SCRIPT_DIR}/scripts/${SCRIPT_FILE}"
+  if [[ -f "$SRC" ]]; then
+    oc cp "$SRC" "${PERF_NAMESPACE}/benchmark-runner:/scripts/scripts/${SCRIPT_FILE}"
+    ok "  ${SCRIPT_FILE} → /scripts/scripts/"
+  else
+    warn "  ${SCRIPT_FILE} not found at ${SRC}"
+  fi
+done
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3. VERIFY POD PLACEMENT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -133,24 +177,31 @@ echo "============================================"
 echo "  Benchmark Runner Ready"
 echo "============================================"
 echo ""
-info "Run the load test (from your laptop):"
+info "GuideLLM benchmarks (results logged to MLflow automatically):"
+echo "  # Phase 1 — Direct baseline"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/run_guidellm_bench.py --method direct --sim-profile fast --payload small"
+echo ""
+echo "  # Phase 2 — OGX Chat-Completion"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/run_guidellm_bench.py --method chat --sim-profile fast --payload all"
+echo ""
+echo "  # Phase 3 — OGX Response API"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/run_guidellm_bench.py --method response --sim-profile fast --payload all"
+echo ""
+echo "  # Quick smoke test"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/run_guidellm_bench.py --method chat --sim-profile fast --quick"
+echo ""
+echo "  # Skip MLflow logging"
+echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/run_guidellm_bench.py --method chat --sim-profile fast --no-mlflow"
+echo ""
+info "MLflow: experiments named OGX-<method>-<sim-profile> (e.g. OGX-chat-fast)"
+echo "  Tracking URI: ${MLFLOW_TRACKING_URI}"
+echo "  Workspace:    ${MLFLOW_WORKSPACE}"
+echo ""
+info "Legacy load test:"
 echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/06-load-test.py"
-echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/06-load-test.py --quick"
-echo "  oc exec benchmark-runner -n ${PERF_NAMESPACE} -- python3 /scripts/06-load-test.py --scale"
 echo ""
 info "Or connect interactively:"
 echo "  oc exec -it benchmark-runner -n ${PERF_NAMESPACE} -- bash"
-echo "  python3 /scripts/06-load-test.py --scale --levels 5 10 20 40"
-echo ""
-info "Run vLLM benchmark (raw inference, inside the pod):"
-echo "  python -m vllm.benchmark_serving \\"
-echo "    --backend openai \\"
-echo "    --base-url \$VLLM_URL \\"
-echo "    --model \$MODEL_ID \\"
-echo "    --dataset-name sharegpt \\"
-echo "    --num-prompts 200 \\"
-echo "    --request-rate 2 \\"
-echo "    --seed 42"
 echo ""
 info "Copy results out when done:"
 echo "  oc cp ${PERF_NAMESPACE}/benchmark-runner:/results ./benchmark-results-\$(date +%Y%m%d)"
